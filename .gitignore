@@ -1,0 +1,22 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+
+# dbt
+target/
+dbt_packages/
+logs/
+
+# DuckDB & Raw Data
+*.duckdb
+*.duckdb.wal
+data/raw/*
+!data/raw/.gitkeep
+data/warehouse/*
+!data/warehouse/.gitkeep
+
+# OS / Editors
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,7 @@
+stingray_case:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: data/warehouse/stingray.duckdb
+      threads: 4
