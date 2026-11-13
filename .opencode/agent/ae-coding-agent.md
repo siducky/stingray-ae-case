@@ -2,11 +2,23 @@
 
 ## Environment & Tooling
 
-**Package Manager:** Always run Python, dbt, and Marimo commands via `uv run` (e.g., `uv run dbt build --profiles-dir .`).
-**Warehouse:** Local DuckDB (`data/warehouse/stingray.duckdb`).
-**Raw Data:** Located in `data/raw/` (CSV, Parquet, or JSON). Do not modify raw files in place.
-**Notebooks:** Use `marimo` (`notebooks/`) for initial exploratory data profiling and visual validation. Keep notebooks clean and modular.
+**Package Manager:** Always run Python, dbt, and Marimo commands via `uv run` (e.g., `uv run dbt build --profiles-dir .`) so commands execture inside the project `.venv`.
 
+**dbt Execution & Testing:**
+Validate setup: `uv run dbt debug --profiles-dir .`
+Build models and run all tests: `uv run dbt build --profiles-dir .`
+Run specific model(s): `uv run dbt run --select <model_name> --profiles-dir .`
+Run tests only: `uv run dbt test --profiles-dir .
+**Warehouse:** Local DuckDB (`data/warehouse/stingray.duckdb`).
+
+**Raw Data:** Located in `data/raw/` (CSV, Parquet, or JSON). Do not modify raw files in place.
+
+**Python & Linting (Ruff):**
+Run helper scripts: `uv run python <script.py>`
+Lint and format Python/Marimo files: `uv run ruff check --fix . && uv run ruff format .`
+
+**Marimo Notebooks:**
+Edit/validate notebooks: `uv run marimo check notebooks/`
 
 ## Architecture & Layering Rules
 
@@ -35,6 +47,19 @@ Name all booleans with `is_` or `has_` prefixes.
 Name all timestamps with `_at_utc` and dates with `_date`.
 Always use explicit column lists—never `select *` in intermediate or mart models.
 
+# Python Coding & Linting Rules
+
+## Verification Commands
+- Run `ruff check --fix . && ruff format .` after every edit.
+- Never use `# noqa` or `# type: ignore` without an explanatory comment.
+
+## Python Conventions
+- Target Python 3.12+. Use native generics (`list[str]`, `dict[str, int]`) and `X | Y` unions.
+- Use `pathlib.Path` instead of `os.path` for all filesystem operations.
+- Write Pydantic v2 models or frozen `@dataclass(slots=True)` for structured data.
+- Never swallow exceptions with bare `except:` or broad `except Exception:`. Let errors surface.
+- Require keyword-only arguments (`*`) for functions taking 4+ parameters.
+- Keep functions small and declare variables close to their first use.
 
 ## Data Quality, Testing & Documentation
 
