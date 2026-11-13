@@ -21,31 +21,38 @@ Lint and format Python/Marimo files: `uv run ruff check --fix . && uv run ruff f
 Edit/validate notebooks: `uv run marimo check notebooks/`
 
 ## Architecture & Layering Rules
+Use `snake_case` for all files, folders, models, and columns. Prefix YAML files with an underscore (`_<domain>__models.yml`).
 
-**Staging (`models/staging/`):**
-Strictly 1-to-1 with raw source tables.
-Naming: `stg_<source>__.sql`.
-Allowed operations: Renaming columns (`snake_case`), explicit data type casting, standardizing timestamps to `_utc`, basic trimming/lowercasing, and deduplication.
-**Forbidden:** Joins, aggregations, or business logic.
+- **Staging (`stg_<source>__.sql`)**: 1:1 with raw source tables. Clean, rename, and cast columns only. Do not use joins or aggregations. Materialize as `view`.
+- **Intermediate (`int_<domain>_<verb>.sql`)**: Modular business logic and complex joins between staging and marts. Materialize as `ephemeral` or `view`.
+- **Marts - Facts (`fct_<business_process>.sql`)**: Immutable events, transactions, and metrics. Materialize as `table` or `incremental`.
+- **Marts - Dimensions (`dim_.sql`)**: Descriptive business entities and attributes. Materialize as `table`.
 
-**Intermediate (`models/intermediate/`):**
-Naming: `int__<verb>.sql`.
-Use for complex joins, sessionization, date-spine gap filling, and SCD Type 2 logic.
+### Column Naming Rules
+- **Keys**: `_id`
+- **Booleans**: `is_<condition>` or `has_<condition>`
+- **Timestamps**: `<event>_at` (always cast to UTC)
+- **Dates**: `<event>_date`
 
-**Marts (`models/marts/`):**
-Design a strict **Star Schema** optimized for **Power BI**: `dim_.sql` and `fct_<event_or_metric>.sql`.
-Every mart model must explicitly state its **grain** in a top-of-file comment and in `_mart_models.yml`.
-Avoid wide, denormalized flat tables unless explicitly justified for performance.
+### SQL Structure & Style
+- **CTE Pattern**: Structure every model into four sections:
+  1. **Import CTEs**: Pull all upstream models at the top using `{{ source() }}` or `{{ ref() }}`. Never hardcode database or schema names.
+  2. **Logical CTEs**: Isolate distinct transformations (filtering, joining, aggregating) into separate, descriptively named CTEs.
+  3. **Final CTE**: Assemble output columns and aliases in a CTE named `final`.
+  4. **Final Select**: Always end the file with `select * from final`.
+- **Formatting**: Use lowercase for all SQL keywords (`select`, `from`, `where`) and functions. Avoid deeply nested subqueries.
+- **Joins**: Always specify `inner join` or `left join` (never bare `join`). Qualify every column with its CTE/table name when joining multiple relations.
+- **Grouping**: Use explicit column names in `group by` and `order by` clauses instead of positional numbers (`group by 1`).
 
+### Dialect: DuckDB
+- Write **DuckDB SQL** (PostgreSQL-compatible). Do not use Snowflake, BigQuery, or T-SQL syntax (e.g., avoid `QUALIFY` with Snowflake-specific functions unless valid in DuckDB, `SAFE_DIVIDE`, or `DATEADD`).
+- Use `::` for type casting (e.g., `created_at::date`, `amount::decimal(18,2)`).
+- Use `date_trunc('day', col)` and `date_diff('day', start_date, end_date)` for date math.
+- Prefer explicit column lists over `SELECT * EXCLUDE (...)` in mart models to keep final schemas deterministic.
 
-
-## SQL Style & Conventions
-
-Use CTEs (`with ... as`) rather than subqueries.
-Place `select` statements at the bottom of the file (`final as (...) select * from final`).
-Name all booleans with `is_` or `has_` prefixes.
-Name all timestamps with `_at_utc` and dates with `_date`.
-Always use explicit column lists—never `select *` in intermediate or mart models.
+### Testing & Documentation
+- Always apply `unique` and `not_null` tests to the primary key of every model.
+- Add `relationships` tests to foreign keys and `accepted_values` tests to categorical status fields.
 
 # Python Coding & Linting Rules
 
