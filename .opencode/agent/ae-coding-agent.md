@@ -1,3 +1,22 @@
+---
+description: Analytics engineering coding agent for the Stingray dbt project
+mode: primary
+permissions:
+  - action: "*"
+    resource: "*"
+    effect: allow
+  - action: read
+    resource: "*.env"
+    effect: ask
+  - action: read
+    resource: "*.env.*"
+    effect: ask
+  - action: read
+    resource: "*.env.example"
+    effect: allow
+---
+
+
 # Analytics Engineering Case Study Rules
 
 ## Environment & Tooling
