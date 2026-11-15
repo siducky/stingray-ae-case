@@ -1,6 +1,7 @@
 ---
 description: Analytics engineering coding agent for the Stingray dbt project
 mode: primary
+model: "opencode-go/deepseek-v4.1-flash#high"
 permissions:
   - action: "*"
     resource: "*"
