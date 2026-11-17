@@ -18,6 +18,21 @@ vars:
   # Timezone used to interpret naive local timestamps entered by farmers (farmer_pen_log.log_ts).
   # Single zone by design; multi-zone handling is listed in docs/limitations.md.
   farmer_log_timezone: 'Europe/Oslo'
+  # Timezone for site-local calendar days (storm day-splitting, activity_date boundaries).
+  # Same value as farmer_log_timezone today, kept separate because they answer different questions.
+  site_timezone: 'Europe/Oslo'
+  # Fish-count entries above this value are treated as implausible and excluded from
+  # snapshot selection (kept in staging). Matches the staging warn test threshold.
+  fish_count_plausible_max: 1000000
+  # Maximum age (days) of a fish-count entry before it stops being carried forward.
+  fish_count_max_age_days: 7
+  # Storm events whose gap is strictly less than this many hours are merged into one episode.
+  # A gap of exactly this many hours starts a new episode.
+  storm_episode_gap_hours: 24
+  # Local calendar dates of quiet weather compared against the episode, before its start date.
+  storm_baseline_days: 3
+  # Local calendar dates compared after the episode end date.
+  storm_post_days: 3
 
 models:
   stingray_case:

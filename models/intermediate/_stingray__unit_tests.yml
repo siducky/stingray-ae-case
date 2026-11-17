@@ -1,0 +1,281 @@
+version: 2
+
+unit_tests:
+  - name: test_node_day_spine_attributes_assignment_by_date
+    description: >
+      N05 moves S02/P202 → S01/P103 on 2026-10-08. The spine must attribute Oct 8 to the new
+      assignment and keep the missing activity record as null measures, not zeros.
+    model: int_node_days_assigned
+    given:
+      - input: ref('stg_stingray__node_daily_activity')
+        format: sql
+        rows: |
+          select md5('N05-2026-10-07') as node_activity_id, 'N05' as node_id, date '2026-10-07' as activity_date, 10 as lice_detection_count, 20 as laser_shot_count, 1440 as uptime_minutes
+          union all
+          select md5('N05-2026-10-09') as node_activity_id, 'N05' as node_id, date '2026-10-09' as activity_date, 10 as lice_detection_count, 20 as laser_shot_count, 1440 as uptime_minutes
+          union all
+          select md5('N05-2026-10-10') as node_activity_id, 'N05' as node_id, date '2026-10-10' as activity_date, 10 as lice_detection_count, 20 as laser_shot_count, 1440 as uptime_minutes
+      - input: ref('stg_stingray__node_pen_assignments')
+        format: sql
+        rows: |
+          select 'A1' as assignment_id, 'N05' as node_id, 'S02' as site_id, 'P202' as pen_id, date '2026-05-15' as valid_from_date, date '2026-10-07' as valid_to_date, date '2026-10-08' as valid_until_date, false as is_current_assignment
+          union all
+          select 'A2' as assignment_id, 'N05' as node_id, 'S01' as site_id, 'P103' as pen_id, date '2026-10-08' as valid_from_date, null as valid_to_date, date '9999-12-31' as valid_until_date, true as is_current_assignment
+    expect:
+      rows:
+        - {node_id: N05, site_id: S02, pen_id: P202, activity_date: 2026-10-07, assignment_id: A1, has_activity_record: true, laser_shot_count: 20}
+        - {node_id: N05, site_id: S01, pen_id: P103, activity_date: 2026-10-08, assignment_id: A2, has_activity_record: false, laser_shot_count: null}
+        - {node_id: N05, site_id: S01, pen_id: P103, activity_date: 2026-10-09, assignment_id: A2, has_activity_record: true, laser_shot_count: 20}
+        - {node_id: N05, site_id: S01, pen_id: P103, activity_date: 2026-10-10, assignment_id: A2, has_activity_record: true, laser_shot_count: 20}
+
+  - name: test_storm_split_into_local_days
+    description: >
+      Oslo is UTC+2 in October. ST-0041 (05T17:00Z→07T05:00Z) is locally 19:00→07:00: 300 min on
+      Oct 5, 1440 on Oct 6, 420 on Oct 7. ST-0045 (12T20:00Z→12T22:00Z) is locally 22:00 Oct 12 →
+      midnight Oct 13: it ends exactly at the Oslo day boundary, so it yields one 120-minute day
+      (Oct 12) and no Oct 13 row. Day boundaries come from the mocked int_dates spine.
+    model: int_storm_daily_exposure
+    given:
+      - input: ref('stg_stingray__storm_events')
+        format: sql
+        rows: |
+          select 'ST-0041' as storm_id, 'S01' as site_id, timestamp '2026-10-05 17:00:00' as storm_started_at, timestamp '2026-10-07 05:00:00' as storm_ended_at, 36.0 as storm_duration_hours, 'high' as severity
+          union all
+          select 'ST-0045' as storm_id, 'S01' as site_id, timestamp '2026-10-12 20:00:00' as storm_started_at, timestamp '2026-10-12 22:00:00' as storm_ended_at, 2.0 as storm_duration_hours, 'low' as severity
+      - input: ref('int_dates')
+        format: sql
+        rows: |
+          select cast(d as date) as date_day,
+                 timezone('UTC', timezone('Europe/Oslo', d)) as day_start_utc,
+                 timezone('UTC', timezone('Europe/Oslo', d + interval '1 day')) as day_end_utc,
+                 1440 as day_duration_minutes
+          from generate_series(timestamp '2026-10-01', timestamp '2026-10-15', interval '1 day') as t(d)
+    expect:
+      rows:
+        - {storm_id: ST-0041, site_id: S01, storm_date: 2026-10-05, storm_minutes: 300}
+        - {storm_id: ST-0041, site_id: S01, storm_date: 2026-10-06, storm_minutes: 1440}
+        - {storm_id: ST-0041, site_id: S01, storm_date: 2026-10-07, storm_minutes: 420}
+        - {storm_id: ST-0045, site_id: S01, storm_date: 2026-10-12, storm_minutes: 120}
+
+  - name: test_fish_count_selection_deterministic_and_withholds_implausible
+    description: >
+      P102: latest entry on Oct 8 wins (the 14:47 correction, not the 08:16 entry) and is carried
+      forward within 7 days. P103: two entries share the exact same timestamp - the higher log_id
+      wins the tie. P201: the latest entry on Oct 8 is the implausible 1,852,000 count - an older
+      value is NOT silently substituted; the snapshot is withheld (null, has_fish_count = false)
+      with the implausible log kept for traceability.
+    model: int_pen_daily_fish_count
+    given:
+      - input: ref('int_fish_counts_validated')
+        format: sql
+        rows: |
+          select 1002 as log_id, 'P102' as pen_id, timestamp '2026-10-01 06:20:00' as logged_at, timestamp '2026-10-01 08:20:00' as logged_at_local, date '2026-10-01' as logged_local_date, 168900 as fish_count, 'farmer_vik' as entered_by, null as log_comment, true as is_fish_count_plausible, false as is_duplicate_pen_day
+          union all
+          select 1012 as log_id, 'P102' as pen_id, timestamp '2026-10-08 06:16:00' as logged_at, timestamp '2026-10-08 08:16:00' as logged_at_local, date '2026-10-08' as logged_local_date, 167500 as fish_count, 'farmer_vik' as entered_by, null as log_comment, true as is_fish_count_plausible, true as is_duplicate_pen_day
+          union all
+          select 1013 as log_id, 'P102' as pen_id, timestamp '2026-10-08 12:47:00' as logged_at, timestamp '2026-10-08 14:47:00' as logged_at_local, date '2026-10-08' as logged_local_date, 164300 as fish_count, 'farmer_vik' as entered_by, 'corrected count' as log_comment, true as is_fish_count_plausible, true as is_duplicate_pen_day
+          union all
+          select 1004 as log_id, 'P201' as pen_id, timestamp '2026-10-01 07:05:00' as logged_at, timestamp '2026-10-01 09:05:00' as logged_at_local, date '2026-10-01' as logged_local_date, 185200 as fish_count, 'farmer_str' as entered_by, null as log_comment, true as is_fish_count_plausible, false as is_duplicate_pen_day
+          union all
+          select 1014 as log_id, 'P201' as pen_id, timestamp '2026-10-08 05:52:00' as logged_at, timestamp '2026-10-08 07:52:00' as logged_at_local, date '2026-10-08' as logged_local_date, 1852000 as fish_count, 'farmer_str' as entered_by, null as log_comment, false as is_fish_count_plausible, false as is_duplicate_pen_day
+          union all
+          select 1020 as log_id, 'P103' as pen_id, timestamp '2026-10-08 08:00:00' as logged_at, timestamp '2026-10-08 10:00:00' as logged_at_local, date '2026-10-08' as logged_local_date, 96000 as fish_count, 'farmer_vik' as entered_by, null as log_comment, true as is_fish_count_plausible, true as is_duplicate_pen_day
+          union all
+          select 1021 as log_id, 'P103' as pen_id, timestamp '2026-10-08 08:00:00' as logged_at, timestamp '2026-10-08 10:00:00' as logged_at_local, date '2026-10-08' as logged_local_date, 97000 as fish_count, 'farmer_vik' as entered_by, null as log_comment, true as is_fish_count_plausible, true as is_duplicate_pen_day
+      - input: ref('stg_stingray__node_daily_activity')
+        format: sql
+        rows: |
+          select 'N01' as node_id, cast(d as date) as activity_date, 10 as lice_detection_count, 20 as laser_shot_count, 1440 as uptime_minutes
+          from generate_series(date '2026-10-01', date '2026-10-10', interval '1 day') as t(d)
+    expect:
+      rows:
+        - {pen_id: P102, activity_date: 2026-10-01, fish_count: 168900, has_fish_count: true, fish_count_log_id: 1002, fish_count_age_days: 0}
+        - {pen_id: P102, activity_date: 2026-10-02, fish_count: 168900, has_fish_count: true, fish_count_log_id: 1002, fish_count_age_days: 1}
+        - {pen_id: P102, activity_date: 2026-10-03, fish_count: 168900, has_fish_count: true, fish_count_log_id: 1002, fish_count_age_days: 2}
+        - {pen_id: P102, activity_date: 2026-10-04, fish_count: 168900, has_fish_count: true, fish_count_log_id: 1002, fish_count_age_days: 3}
+        - {pen_id: P102, activity_date: 2026-10-05, fish_count: 168900, has_fish_count: true, fish_count_log_id: 1002, fish_count_age_days: 4}
+        - {pen_id: P102, activity_date: 2026-10-06, fish_count: 168900, has_fish_count: true, fish_count_log_id: 1002, fish_count_age_days: 5}
+        - {pen_id: P102, activity_date: 2026-10-07, fish_count: 168900, has_fish_count: true, fish_count_log_id: 1002, fish_count_age_days: 6}
+        - {pen_id: P102, activity_date: 2026-10-08, fish_count: 164300, has_fish_count: true, fish_count_log_id: 1013, fish_count_age_days: 0}
+        - {pen_id: P102, activity_date: 2026-10-09, fish_count: 164300, has_fish_count: true, fish_count_log_id: 1013, fish_count_age_days: 1}
+        - {pen_id: P102, activity_date: 2026-10-10, fish_count: 164300, has_fish_count: true, fish_count_log_id: 1013, fish_count_age_days: 2}
+        - {pen_id: P201, activity_date: 2026-10-01, fish_count: 185200, has_fish_count: true, fish_count_log_id: 1004, fish_count_age_days: 0}
+        - {pen_id: P201, activity_date: 2026-10-02, fish_count: 185200, has_fish_count: true, fish_count_log_id: 1004, fish_count_age_days: 1}
+        - {pen_id: P201, activity_date: 2026-10-03, fish_count: 185200, has_fish_count: true, fish_count_log_id: 1004, fish_count_age_days: 2}
+        - {pen_id: P201, activity_date: 2026-10-04, fish_count: 185200, has_fish_count: true, fish_count_log_id: 1004, fish_count_age_days: 3}
+        - {pen_id: P201, activity_date: 2026-10-05, fish_count: 185200, has_fish_count: true, fish_count_log_id: 1004, fish_count_age_days: 4}
+        - {pen_id: P201, activity_date: 2026-10-06, fish_count: 185200, has_fish_count: true, fish_count_log_id: 1004, fish_count_age_days: 5}
+        - {pen_id: P201, activity_date: 2026-10-07, fish_count: 185200, has_fish_count: true, fish_count_log_id: 1004, fish_count_age_days: 6}
+        - {pen_id: P201, activity_date: 2026-10-08, fish_count: null, has_fish_count: false, fish_count_log_id: 1014, fish_count_age_days: 0}
+        - {pen_id: P201, activity_date: 2026-10-09, fish_count: null, has_fish_count: false, fish_count_log_id: 1014, fish_count_age_days: 1}
+        - {pen_id: P201, activity_date: 2026-10-10, fish_count: null, has_fish_count: false, fish_count_log_id: 1014, fish_count_age_days: 2}
+        - {pen_id: P103, activity_date: 2026-10-08, fish_count: 97000, has_fish_count: true, fish_count_log_id: 1021, fish_count_age_days: 0}
+        - {pen_id: P103, activity_date: 2026-10-09, fish_count: 97000, has_fish_count: true, fish_count_log_id: 1021, fish_count_age_days: 1}
+        - {pen_id: P103, activity_date: 2026-10-10, fish_count: 97000, has_fish_count: true, fish_count_log_id: 1021, fish_count_age_days: 2}
+
+  - name: test_pen_daily_activity_reports_missing_as_null
+    description: >
+      A pen-day where no assigned node reported keeps null measures and completeness 0; the node
+      set change against the previous available pen-day is flagged.
+    model: int_pen_daily_activity
+    given:
+      - input: ref('int_node_days_assigned')
+        format: sql
+        rows: |
+          select 'ND1' as node_day_id, 'A1' as assignment_id, 'N05' as node_id, 'S01' as site_id, 'P103' as pen_id, date '2026-10-07' as activity_date, null as laser_shot_count, null as lice_detection_count, null as uptime_minutes, false as has_activity_record
+          union all
+          select 'ND2' as node_day_id, 'A2' as assignment_id, 'N06' as node_id, 'S01' as site_id, 'P103' as pen_id, date '2026-10-08' as activity_date, 100 as laser_shot_count, 50 as lice_detection_count, 1440 as uptime_minutes, true as has_activity_record
+          union all
+          select 'ND3' as node_day_id, 'A2' as assignment_id, 'N06' as node_id, 'S01' as site_id, 'P103' as pen_id, date '2026-10-09' as activity_date, 110 as laser_shot_count, 55 as lice_detection_count, 1440 as uptime_minutes, true as has_activity_record
+    expect:
+      rows:
+        - {site_id: S01, pen_id: P103, activity_date: 2026-10-07, expected_node_days: 1, reported_node_days: 0, laser_shot_count: null, has_node_set_change: false, reporting_completeness: 0.0, node_ids: 'N05'}
+        - {site_id: S01, pen_id: P103, activity_date: 2026-10-08, expected_node_days: 1, reported_node_days: 1, laser_shot_count: 100, has_node_set_change: true, reporting_completeness: 1.0, node_ids: 'N06'}
+        - {site_id: S01, pen_id: P103, activity_date: 2026-10-09, expected_node_days: 1, reported_node_days: 1, laser_shot_count: 110, has_node_set_change: false, reporting_completeness: 1.0, node_ids: 'N06'}
+
+  - name: test_storm_episode_gap_boundaries_and_nesting
+    description: >
+      S01: ST-B starts 23h after ST-A ends - merges into one episode. ST-C starts exactly 24h
+      after the running-maximum end (Oct 2 12:00) - new episode. S02: ST-E is nested inside ST-D
+      and ST-F follows 5h later - all merge into one episode. S03 is alone. Storms at different
+      sites never merge. The S01 episode span (36h) includes a 23h quiet gap; exposure minutes
+      are never derived from it (see the singular exposure tests).
+    model: int_storm_episodes
+    given:
+      - input: ref('stg_stingray__storm_events')
+        format: sql
+        rows: |
+          select 'ST-A' as storm_id, 'S01' as site_id, timestamp '2026-10-01 00:00:00' as storm_started_at, timestamp '2026-10-01 10:00:00' as storm_ended_at, 10.0 as storm_duration_hours, 'low' as severity
+          union all
+          select 'ST-B' as storm_id, 'S01' as site_id, timestamp '2026-10-02 09:00:00' as storm_started_at, timestamp '2026-10-02 12:00:00' as storm_ended_at, 3.0 as storm_duration_hours, 'moderate' as severity
+          union all
+          select 'ST-C' as storm_id, 'S01' as site_id, timestamp '2026-10-03 12:00:00' as storm_started_at, timestamp '2026-10-03 18:00:00' as storm_ended_at, 6.0 as storm_duration_hours, 'high' as severity
+          union all
+          select 'ST-D' as storm_id, 'S02' as site_id, timestamp '2026-10-01 05:00:00' as storm_started_at, timestamp '2026-10-02 05:00:00' as storm_ended_at, 24.0 as storm_duration_hours, 'moderate' as severity
+          union all
+          select 'ST-E' as storm_id, 'S02' as site_id, timestamp '2026-10-01 20:00:00' as storm_started_at, timestamp '2026-10-01 22:00:00' as storm_ended_at, 2.0 as storm_duration_hours, 'low' as severity
+          union all
+          select 'ST-F' as storm_id, 'S02' as site_id, timestamp '2026-10-02 10:00:00' as storm_started_at, timestamp '2026-10-02 11:00:00' as storm_ended_at, 1.0 as storm_duration_hours, 'high' as severity
+          union all
+          select 'ST-G' as storm_id, 'S03' as site_id, timestamp '2026-10-05 00:00:00' as storm_started_at, timestamp '2026-10-05 06:00:00' as storm_ended_at, 6.0 as storm_duration_hours, 'low' as severity
+    expect:
+      rows:
+        - {site_id: S01, episode_started_at: '2026-10-01 00:00:00', episode_ended_at: '2026-10-02 12:00:00', episode_start_date: 2026-10-01, episode_end_date: 2026-10-02, storm_event_count: 2, max_severity: moderate, storm_ids: 'ST-A,ST-B'}
+        - {site_id: S01, episode_started_at: '2026-10-03 12:00:00', episode_ended_at: '2026-10-03 18:00:00', episode_start_date: 2026-10-03, episode_end_date: 2026-10-03, storm_event_count: 1, max_severity: high, storm_ids: 'ST-C'}
+        - {site_id: S02, episode_started_at: '2026-10-01 05:00:00', episode_ended_at: '2026-10-02 11:00:00', episode_start_date: 2026-10-01, episode_end_date: 2026-10-02, storm_event_count: 3, max_severity: high, storm_ids: 'ST-D,ST-E,ST-F'}
+        - {site_id: S03, episode_started_at: '2026-10-05 00:00:00', episode_ended_at: '2026-10-05 06:00:00', episode_start_date: 2026-10-05, episode_end_date: 2026-10-05, storm_event_count: 1, max_severity: low, storm_ids: 'ST-G'}
+
+  - name: test_pen_storm_daily_analysis_windows
+    description: >
+      Episode EP1 runs locally Oct 5 19:00 → Oct 7 07:00 (start_date Oct 5, end_date Oct 7). The
+      window is before = Oct 2-4, during = Oct 5-7 (Oct 5 is only partially affected yet still
+      during), after = Oct 8-10. Only pens at the episode's site are included (P201 at S02 is
+      excluded). A zero-uptime day (Oct 6) yields a null rate, a missing-activity day (Oct 9)
+      keeps null measures with completeness 0.
+    model: int_pen_storm_daily_analysis
+    given:
+      - input: ref('int_storm_episodes')
+        format: sql
+        rows: |
+          select 'EP1' as storm_episode_id, 'S01' as site_id, timestamp '2026-10-05 17:00:00' as episode_started_at, timestamp '2026-10-07 05:00:00' as episode_ended_at, date '2026-10-05' as episode_start_date, date '2026-10-07' as episode_end_date, 1 as storm_event_count, 'high' as max_severity, 'ST-0041' as storm_ids
+      - input: ref('int_pen_daily_activity')
+        format: sql
+        rows: |
+          select
+            'PD101' || cast(d as varchar) as pen_day_id,
+            'S01' as site_id,
+            'P101' as pen_id,
+            cast(d as date) as activity_date,
+            1 as expected_node_days,
+            case when cast(d as date) = date '2026-10-09' then 0 else 1 end as reported_node_days,
+            case
+              when cast(d as date) = date '2026-10-09' then null
+              when cast(d as date) = date '2026-10-06' then 0
+              else 75
+            end as laser_shot_count,
+            50 as lice_detection_count,
+            case
+              when cast(d as date) = date '2026-10-09' then null
+              when cast(d as date) = date '2026-10-06' then 0
+              else 1200
+            end as uptime_minutes,
+            'N01' as node_ids,
+            false as has_node_set_change,
+            case when cast(d as date) = date '2026-10-09' then 0.0 else 1.0 end as reporting_completeness
+          from generate_series(date '2026-10-01', date '2026-10-10', interval '1 day') as t(d)
+          union all
+          select 'PDX' as pen_day_id, 'S02' as site_id, 'P201' as pen_id, date '2026-10-05' as activity_date, 1 as expected_node_days, 1 as reported_node_days, 75 as laser_shot_count, 50 as lice_detection_count, 1200 as uptime_minutes, 'N04' as node_ids, false as has_node_set_change, 1.0 as reporting_completeness
+      - input: ref('int_site_daily_storm_summary')
+        format: sql
+        rows: |
+          select 'SD1' as site_day_id, 'S01' as site_id, date '2026-10-05' as activity_date, 1 as storm_count, 300 as total_storm_minutes, 'high' as max_storm_severity, true as has_storm
+          union all
+          select 'SD2' as site_day_id, 'S01' as site_id, date '2026-10-06' as activity_date, 1 as storm_count, 1440 as total_storm_minutes, 'high' as max_storm_severity, true as has_storm
+          union all
+          select 'SD3' as site_day_id, 'S01' as site_id, date '2026-10-07' as activity_date, 1 as storm_count, 420 as total_storm_minutes, 'high' as max_storm_severity, true as has_storm
+          union all
+          select 'SD4' as site_day_id, 'S02' as site_id, date '2026-10-05' as activity_date, 1 as storm_count, 999 as total_storm_minutes, 'high' as max_storm_severity, true as has_storm
+    expect:
+      rows:
+        - {pen_id: P101, activity_date: 2026-10-02, storm_period: before, days_from_episode_start: -3, storm_minutes: 0, storm_event_count: 0, laser_shot_count: 75, uptime_minutes: 1200, shots_per_operating_hour: 3.75, reporting_completeness: 1.0}
+        - {pen_id: P101, activity_date: 2026-10-03, storm_period: before, days_from_episode_start: -2, storm_minutes: 0, storm_event_count: 0, laser_shot_count: 75, uptime_minutes: 1200, shots_per_operating_hour: 3.75, reporting_completeness: 1.0}
+        - {pen_id: P101, activity_date: 2026-10-04, storm_period: before, days_from_episode_start: -1, storm_minutes: 0, storm_event_count: 0, laser_shot_count: 75, uptime_minutes: 1200, shots_per_operating_hour: 3.75, reporting_completeness: 1.0}
+        - {pen_id: P101, activity_date: 2026-10-05, storm_period: during, days_from_episode_start: 0, storm_minutes: 300, storm_event_count: 1, laser_shot_count: 75, uptime_minutes: 1200, shots_per_operating_hour: 3.75, reporting_completeness: 1.0}
+        - {pen_id: P101, activity_date: 2026-10-06, storm_period: during, days_from_episode_start: 1, storm_minutes: 1440, storm_event_count: 1, laser_shot_count: 0, uptime_minutes: 0, shots_per_operating_hour: null, reporting_completeness: 1.0}
+        - {pen_id: P101, activity_date: 2026-10-07, storm_period: during, days_from_episode_start: 2, storm_minutes: 420, storm_event_count: 1, laser_shot_count: 75, uptime_minutes: 1200, shots_per_operating_hour: 3.75, reporting_completeness: 1.0}
+        - {pen_id: P101, activity_date: 2026-10-08, storm_period: after, days_from_episode_start: 3, storm_minutes: 0, storm_event_count: 0, laser_shot_count: 75, uptime_minutes: 1200, shots_per_operating_hour: 3.75, reporting_completeness: 1.0}
+        - {pen_id: P101, activity_date: 2026-10-09, storm_period: after, days_from_episode_start: 4, storm_minutes: 0, storm_event_count: 0, laser_shot_count: null, uptime_minutes: null, shots_per_operating_hour: null, reporting_completeness: 0.0}
+        - {pen_id: P101, activity_date: 2026-10-10, storm_period: after, days_from_episode_start: 5, storm_minutes: 0, storm_event_count: 0, laser_shot_count: 75, uptime_minutes: 1200, shots_per_operating_hour: 3.75, reporting_completeness: 1.0}
+
+  - name: test_storm_pen_baselines_rates_and_null_handling
+    description: >
+      P1: baseline 3 x (75 shots, 1200 min) = 225/3600 -> 3.75 shots/h; during 2 days = 225/2400 ->
+      5.625 (+50%); after = 3.75 (+0%). P2: zero baseline uptime -> null baseline rate and null
+      percentage changes even though a during rate exists. P3: all during activity missing ->
+      null during rate -> null percentage change (missing is not zero). Rates use
+      total shots / total uptime * 60, never an average of daily rates.
+    model: int_storm_pen_baselines
+    given:
+      - input: ref('int_pen_storm_daily_analysis')
+        format: sql
+        rows: |
+          select 'E1' as storm_episode_id, 'S01' as site_id, 'P1' as pen_id, date '2026-10-02' as activity_date, 'before' as storm_period, -3 as days_from_episode_start, 0 as storm_minutes, 0 as storm_event_count, 75 as laser_shot_count, 50 as lice_detection_count, 1200 as uptime_minutes, 3.75 as shots_per_operating_hour, 1.0 as reporting_completeness
+          union all
+          select 'E1', 'S01', 'P1', date '2026-10-03', 'before', -2, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P1', date '2026-10-04', 'before', -1, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P1', date '2026-10-05', 'during', 0, 300, 1, 150, 50, 1200, 7.5, 1.0
+          union all
+          select 'E1', 'S01', 'P1', date '2026-10-06', 'during', 1, 1440, 1, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P1', date '2026-10-07', 'after', 1, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P1', date '2026-10-08', 'after', 2, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P1', date '2026-10-09', 'after', 3, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P2', date '2026-10-02', 'before', -3, 0, 0, 0, 0, 0, null, 0.5
+          union all
+          select 'E1', 'S01', 'P2', date '2026-10-03', 'before', -2, 0, 0, 0, 0, 0, null, 0.5
+          union all
+          select 'E1', 'S01', 'P2', date '2026-10-04', 'before', -1, 0, 0, 0, 0, 0, null, 0.5
+          union all
+          select 'E1', 'S01', 'P2', date '2026-10-05', 'during', 0, 300, 1, 75, 50, 1200, 3.75, 0.5
+          union all
+          select 'E1', 'S01', 'P2', date '2026-10-06', 'during', 1, 1440, 1, 75, 50, 1200, 3.75, 0.5
+          union all
+          select 'E1', 'S01', 'P3', date '2026-10-02', 'before', -3, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P3', date '2026-10-03', 'before', -2, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P3', date '2026-10-04', 'before', -1, 0, 0, 75, 50, 1200, 3.75, 1.0
+          union all
+          select 'E1', 'S01', 'P3', date '2026-10-05', 'during', 0, 300, 1, null, null, null, null, 0.0
+          union all
+          select 'E1', 'S01', 'P3', date '2026-10-06', 'during', 1, 1440, 1, null, null, null, null, 0.0
+    expect:
+      rows:
+        - {pen_id: P1, storm_episode_id: E1, baseline_days: 3, baseline_shots: 225, baseline_uptime_minutes: 3600, baseline_shots_per_operating_hour: 3.75, during_shots: 225, during_uptime_minutes: 2400, during_shots_per_operating_hour: 5.625, after_shots: 225, after_uptime_minutes: 3600, after_shots_per_operating_hour: 3.75, during_change_vs_baseline_pct: 50.0, after_change_vs_baseline_pct: 0.0, baseline_reporting_completeness: 1.0, during_reporting_completeness: 1.0, after_reporting_completeness: 1.0}
+        - {pen_id: P2, storm_episode_id: E1, baseline_days: 3, baseline_shots: 0, baseline_uptime_minutes: 0, baseline_shots_per_operating_hour: null, during_shots: 150, during_uptime_minutes: 2400, during_shots_per_operating_hour: 3.75, after_shots: null, after_uptime_minutes: null, after_shots_per_operating_hour: null, during_change_vs_baseline_pct: null, after_change_vs_baseline_pct: null, baseline_reporting_completeness: 0.5, during_reporting_completeness: 0.5, after_reporting_completeness: null}
+        - {pen_id: P3, storm_episode_id: E1, baseline_days: 3, baseline_shots: 225, baseline_uptime_minutes: 3600, baseline_shots_per_operating_hour: 3.75, during_shots: null, during_uptime_minutes: null, during_shots_per_operating_hour: null, after_shots: null, after_uptime_minutes: null, after_shots_per_operating_hour: null, during_change_vs_baseline_pct: null, after_change_vs_baseline_pct: null, baseline_reporting_completeness: 1.0, during_reporting_completeness: 0.0, after_reporting_completeness: null}
