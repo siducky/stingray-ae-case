@@ -1,7 +1,7 @@
 [project]
 name = "stingray-ae-case"
 version = "0.1.0"
-description = "Add your description here"
+description = "Stingray aquaculture case study: dbt analytics engineering on DuckDB, from raw CSV extracts through staging and intermediate models to a dimensional mart layer (star schema) for storm-impact and pen-activity analysis."
 readme = "README.md"
 authors = [
     { name = "siducky", email = "siddhant@ducky.eco" }

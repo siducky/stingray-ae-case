@@ -1,17 +1,9 @@
-{#-
-    One row per site per storm-affected calendar date.
-
-    total_storm_minutes is CUMULATIVE EVENT-MINUTES: minutes are summed per
-    storm event, so two overlapping storms at the same site on the same day
-    double-count the overlapping wall-clock time. See
-    tests/intermediate/assert_no_overlapping_storms_per_site.sql, which
-    warns if any overlap ever appears in the data.
-
-    Only days with storm exposure exist here. Days without storms are
-    materialised as zero exposure downstream (the final analytical dataset
-    left joins this model onto its pen-day spine), which is why has_storm
-    is a constant true in this model.
--#}
+-- Grain: one row per site per storm-affected day; joining to pen activity
+-- never multiplies rows.
+-- total_storm_minutes is CUMULATIVE EVENT-MINUTES: overlapping storms
+-- would double-count (warn test guards this).
+-- Storm-free days are absent here; downstream left joins coalesce them
+-- to zero exposure.
 
 with
 

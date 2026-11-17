@@ -281,6 +281,8 @@ models:
       - name: fish_count_log_ts
         description: Local wall-clock timestamp of the selected source log entry.
         data_tests: [not_null]
+      - name: fish_count_log_comment
+        description: Free-text comment from the selected source log entry (e.g. 'corrected count', 'some mortality after storm').
       - name: fish_count_entered_by
         description: Farmer who entered the selected source log entry.
         data_tests: [not_null]
@@ -437,8 +439,9 @@ models:
       One row per pen, storm episode and local calendar date within the analytical window:
       before (storm_baseline_days dates preceding episode_start_date), during (all dates
       episode_start_date..episode_end_date, partially affected days included), after
-      (storm_post_days dates following episode_end_date). A pen appears on a date only when it had
-      assigned nodes at the episode's site on that date (historical assignments respected).
+      (storm_post_days dates following episode_end_date). A pen belongs to an episode only when it
+      had assigned nodes at the episode's site on at least one during date; within the window it
+      appears only on dates where it had assigned nodes (historical assignments respected).
       storm_minutes/storm_event_count are actual site-day exposure, independent of the
       classification. shots_per_operating_hour is null when uptime is zero or missing. Descriptive
       model - no causal interpretation.
@@ -460,7 +463,16 @@ models:
           name: assert_zero_or_missing_uptime_has_no_rate
           description: A zero-uptime or missing-uptime day never yields an artificial rate.
           arguments:
-            expression: "(uptime_minutes is null or uptime_minutes <= 0) or shots_per_operating_hour is not null"
+            expression: >
+              (uptime_minutes is null or uptime_minutes <= 0)
+              or (shots_per_operating_hour is not null and detections_per_operating_hour is not null)
+      - dbt_utils.expression_is_true:
+          name: assert_zero_or_missing_detections_have_no_shots_per_detection
+          description: Shots per detection is null exactly when detections are zero or missing.
+          arguments:
+            expression: >
+              (lice_detection_count is null or lice_detection_count <= 0)
+              or shots_per_detection is not null
       - dbt_utils.expression_is_true:
           name: assert_no_shots_without_reported_activity
           description: Measures are null exactly when the pen-day had no reporting nodes (missing is not zero).
@@ -520,6 +532,18 @@ models:
         description: Pen-day uptime minutes; null when no node reported.
       - name: shots_per_operating_hour
         description: laser_shot_count / uptime_minutes * 60; null when uptime is zero or missing.
+      - name: detections_per_operating_hour
+        description: lice_detection_count / uptime_minutes * 60; null when uptime is zero or missing.
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: shots_per_detection
+        description: laser_shot_count / lice_detection_count; null when detections are zero or missing.
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
       - name: reporting_completeness
         description: Fraction of assigned nodes that reported on the date.
         data_tests:
@@ -528,6 +552,12 @@ models:
               arguments:
                 min_value: 0
                 max_value: 1
+      - name: node_ids
+        description: Comma-separated, sorted list of node_ids assigned to the pen on the date.
+        data_tests: [not_null]
+      - name: has_node_set_change
+        description: True when the assigned node set changed vs the previous available pen-day.
+        data_tests: [not_null]
 
   - name: int_storm_pen_baselines
     description: >
@@ -587,6 +617,23 @@ models:
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
+      - name: during_days
+        description: Number of during-period pen-days included.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: after_days
+        description: Number of after-period pen-days included.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: has_node_change_in_window
+        description: True when the pen's node set changed on any day of the analytical window - discount such comparisons.
+        data_tests: [not_null]
       - name: baseline_reporting_completeness
         description: Unweighted mean of daily reporting_completeness over the before period.
         data_tests:
@@ -626,7 +673,21 @@ models:
         description: Total uptime minutes over the after period; null when every day was missing.
       - name: after_shots_per_operating_hour
         description: after_shots / after_uptime_minutes * 60; null when uptime is zero or missing.
-      - name: during_change_vs_baseline_pct
-        description: Percentage change of the during rate vs the baseline rate; null when the baseline rate is zero/unavailable.
-      - name: after_change_vs_baseline_pct
-        description: Percentage change of the after rate vs the baseline rate; null when the baseline rate is zero/unavailable.
+      - name: baseline_detections
+        description: Total lice detections over the before period; null when every day was missing.
+      - name: during_detections
+        description: Total lice detections over the during period; null when every day was missing.
+      - name: after_detections
+        description: Total lice detections over the after period; null when every day was missing.
+      - name: baseline_detections_per_operating_hour
+        description: Pen-episode attribute - detections per operating hour before the episode.
+      - name: during_detections_per_operating_hour
+        description: Pen-episode attribute - detections per operating hour during the episode.
+      - name: after_detections_per_operating_hour
+        description: Pen-episode attribute - detections per operating hour after the episode.
+      - name: baseline_shots_per_detection
+        description: Pen-episode attribute - laser shots per lice detection before the episode; null when detections are zero or missing.
+      - name: during_shots_per_detection
+        description: Pen-episode attribute - laser shots per lice detection during the episode.
+      - name: after_shots_per_detection
+        description: Pen-episode attribute - laser shots per lice detection after the episode.

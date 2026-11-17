@@ -12,12 +12,16 @@ how much they can affect a result, not by how easy they are to fix.
 | 5 | **DST edge cases are unresolvable from wall-clock input.** A time repeated during the autumn fall-back hour (e.g. 02:00–03:00 on 2026-10-25 in Oslo) maps to one offset only. | All current logs are between 05:52 and 14:47, so none fall in an ambiguous hour. | Capture the offset at entry time (ISO-8601 with `Z`/offset, as `storm_events` already does) and drop the inference. |
 | 6 | **The zone is baked into a unit test.** `test_farmer_log_local_time_converted_to_utc_dst_aware` asserts Oslo offsets. | It is the guard that proves the conversion is DST-aware, not a fixed subtraction. | Update the two expected values whenever the configured zone changes; dbt skips the model if the test fails, so a mismatch cannot ship silently. |
 | 7 | **No source freshness, contracts or incremental models.** CSVs are read in place with `all_varchar`. | Single local DuckDB file, one writer, full refresh in ~1.5 s. | Freshness/contracts on the source, and incremental materialisation for the fact table once volume justifies it. |
-| 8 | **Single environment.** Built and tested on DuckDB only; Snowflake and Postgres are unexercised. | The case runs locally. | See `docs/production_portability.md` for the five non-portable constructs and their per-engine replacements. |
+| 8 | **Single environment.** Built and tested on DuckDB only; Snowflake and Postgres are unexercised. | The case runs locally. | See `docs/production_portability.md` for the twelve non-portable constructs and their per-engine replacements. |
 | 9 | **The reporting window always ends at the last observed `activity_date`; there is no declared reporting end.** | The window is deterministic and reproducible, and missing days *within* the observed period are still surfaced (`has_activity_record = false`). | End-of-period outages are invisible — the spine cannot distinguish "the extract ends here" from "nodes went dark here" (relevant because assignments are open-ended and activity currently ends on the same day as the last storm). If it matters, reintroduce a declared reporting end (a var or project-level config) that **extends** the window, ideally with `greatest(max(activity_date), <declared end>)` semantics so it can never truncate. |
 
-## What I deliberately did not build
+## Deliberate scope decisions
 
-A multi-timezone lookup, deduplication and a node-day spine are all *correct*, but with one zone, 10
-log rows and 61 activity rows they add joins, seeds and tests without changing a single output value.
-Naming the assumption and the migration path demonstrates the same understanding at a fraction of the
-complexity — and keeps the effort where the case is judged: the storm-impact analysis.
+| # | Decision | Status |
+|---|---|---|
+| 1 | **One timezone for farmer logs** (`var('farmer_log_timezone')`) | Still deliberate — see limitation 1 above; all current farmers are in one zone. |
+| 2 | **Fish-count deduplication and the node-day spine** | **Built.** The staging review originally deferred both as unnecessary at 10 log rows / 61 activity rows; the intermediate layer now implements them properly: `int_fish_counts_validated` flags duplicate pen-days, `int_node_days_assigned` provides the node-day spine with `has_activity_record`, and `int_pen_daily_fish_count` resolves same-day corrections deterministically. |
+
+The remaining deliberate non-build is the multi-timezone lookup (limitation 1): with single-zone
+data it would add a seed and joins without changing a single output value. Everything else that
+was deferred at staging time has since been built and tested.

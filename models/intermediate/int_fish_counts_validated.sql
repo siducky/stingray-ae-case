@@ -1,24 +1,10 @@
-{#-
-    One row per original farmer log entry - validation only, no selection.
-
-    Separates data-quality flagging from the daily snapshot selection in
-    int_pen_daily_fish_count. Every source record is preserved; nothing is
-    removed or corrected here.
-
-    Flags (a former fish_count_quality_status column was removed as fully
-    derivable from these two flags; int_pen_daily_fish_count uses
-    is_fish_count_plausible only):
-      - is_fish_count_plausible: fish_count <= var('fish_count_plausible_max').
-      - is_duplicate_pen_day: more than one entry exists for this pen on
-        this local date. Duplicates are quality-relevant but NOT invalid:
-        a same-day correction is a legitimate duplicate.
-
-    Precedence when interpreting the flags: an entry that is both
-    implausible and a duplicate counts as implausible (implausibility is
-    the more severe condition). Duplicate selection is resolved
-    deterministically downstream: latest logged_at_local, then highest
-    log_id.
--#}
+-- Grain: one row per farmer log entry - validation flags only, nothing
+-- removed or corrected.
+-- is_fish_count_plausible: fish_count <= var('fish_count_plausible_max').
+-- is_duplicate_pen_day: several entries share the pen's local date
+-- (legitimate corrections; if an entry is also implausible, implausible
+-- wins). Selection is resolved downstream deterministically (latest
+-- logged_at_local, then highest log_id).
 
 with
 

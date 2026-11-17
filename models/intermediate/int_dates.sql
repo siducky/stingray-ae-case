@@ -1,17 +1,9 @@
-{#-
-    One row per local calendar date.
+-- Grain: one row per local calendar date (var('site_timezone')).
+-- DST-aware: local-day boundaries keep their true length, so 23h spring
+-- and 25h Oslo fall-back days yield 1380/1440/1500 minutes.
+-- Range is source-driven (activity dates + storm-touched local dates),
+-- no clipping: the storm-splitting models must never lose a day.
 
-    Central, DST-aware date spine in var('site_timezone') (Europe/Oslo by
-    default). Local day boundaries are computed by round-tripping local
-    midnight through the timezone, so a 23-hour spring-forward day and a
-    25-hour Oslo fall-back day keep their true durations (1380 / 1500
-    minutes).
-
-    The range is deterministic and purely source-driven: every
-    activity_date plus every local calendar date touched by any storm
-    (start or end instant). No CURRENT_DATE dependency - the
-    storm-splitting models must never lose a day to a clipped spine.
--#}
 {% set site_timezone = var('site_timezone', 'Europe/Oslo') %}
 
 with

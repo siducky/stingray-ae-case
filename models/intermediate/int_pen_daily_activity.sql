@@ -1,18 +1,10 @@
-{#-
-    One row per site, pen and activity date.
-
-    Aggregates the assigned node-days. A pen can hold multiple nodes at
-    once; expected_node_days counts assigned nodes, reported_node_days
-    counts nodes that actually reported. Activity measures are summed
-    over reporting nodes only: sum() ignores nulls and returns null when
-    every contributing node is missing, so a day with no reports stays
-    null rather than becoming zero.
-
-    has_node_set_change compares the node set with the PREVIOUS AVAILABLE
-    pen-day (window lag), not necessarily the previous calendar day: if a
-    pen has no assigned nodes for a while, the comparison is against the
-    last day it did.
--#}
+-- Grain: one row per site, pen and activity date (multi-node pens are
+-- valid). Measures sum over reporting nodes only and stay null when no
+-- node reported: missing is NOT zero. has_node_set_change compares
+-- against the previous AVAILABLE pen-day (window lag), not the previous
+-- calendar day. Daily efficiency rates (shots/detections per operating
+-- hour, shots per detection) are rounded to 3 decimals and null when
+-- their denominators are zero or missing.
 
 with
 
@@ -77,8 +69,31 @@ final as (
         with_node_set_change.uptime_minutes,
         with_node_set_change.node_ids,
         with_node_set_change.has_node_set_change,
-        cast(with_node_set_change.reported_node_days as double)
-            / with_node_set_change.expected_node_days as reporting_completeness
+        round(
+            cast(with_node_set_change.reported_node_days as double)
+                / with_node_set_change.expected_node_days, 3
+        ) as reporting_completeness,
+        case
+            when with_node_set_change.uptime_minutes > 0
+                then round(
+                    cast(with_node_set_change.laser_shot_count as double)
+                        / with_node_set_change.uptime_minutes * 60, 3
+                )
+        end as shots_per_operating_hour,
+        case
+            when with_node_set_change.uptime_minutes > 0
+                then round(
+                    cast(with_node_set_change.lice_detection_count as double)
+                        / with_node_set_change.uptime_minutes * 60, 3
+                )
+        end as detections_per_operating_hour,
+        case
+            when with_node_set_change.lice_detection_count > 0
+                then round(
+                    cast(with_node_set_change.laser_shot_count as double)
+                        / with_node_set_change.lice_detection_count, 3
+                )
+        end as shots_per_detection
     from with_node_set_change
 )
 
