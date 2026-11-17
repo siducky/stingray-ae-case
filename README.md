@@ -125,6 +125,32 @@ provides the shared DST-aware local-day spine. `int_pen_storm_daily_analysis` al
 `stg_stingray__node_daily_activity` is referenced by `int_pen_daily_fish_count` only to define the
 deterministic reporting window.
 
+## Diagrams
+
+Versioned Mermaid sources live in `docs/diagrams/`:
+
+- `architecture.mmd` — layered architecture view (raw → staging → intermediate tracks → marts).
+- `dag.mmd` — model-to-model DAG generated from `target/manifest.json` (`parent_map`), so it
+  always matches what dbt actually resolved.
+
+Render them to SVG (`-b transparent` keeps the background clean for slides and docs). With
+`@mermaid-js/mermaid-cli` 12.x the width flag is `--size` (`-w` was removed):
+
+```bash
+npx -y @mermaid-js/mermaid-cli@latest -i docs/diagrams/architecture.mmd \
+  -o docs/diagrams/architecture.svg -b transparent --size 2400
+
+npx -y @mermaid-js/mermaid-cli@latest -i docs/diagrams/dag.mmd \
+  -o docs/diagrams/dag.svg -b transparent --size 3200
+```
+
+On Linux hosts that block the Chromium sandbox (e.g. Ubuntu 23.10+ with AppArmor user-namespace
+restrictions), add a puppeteer config such as `{"args": ["--no-sandbox"]}` via `-p <config.json>`.
+
+The `.mmd` files are the versioned source of truth; the generated `.svg`/`.png` files are build
+outputs. Regenerate `dag.mmd` after changing models (`uv run dbt docs generate --profiles-dir .`
+refreshes `target/manifest.json` first).
+
 ## Mart layer (star schema)
 
 ```

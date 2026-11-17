@@ -1,0 +1,75 @@
+flowchart LR
+  classDef raw  fill:#f5f5f5,stroke:#9e9e9e,stroke-dasharray:4 2,color:#333
+  classDef stg  fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
+  classDef int  fill:#fff3e0,stroke:#fb8c00,color:#e65100
+  classDef mart fill:#e8f5e9,stroke:#43a047,color:#1b5e20
+
+  subgraph RAW["Raw - data/raw (CSV, all_varchar)"]
+    R1[node_daily_activity]:::raw
+    R2[node_pen_assignment]:::raw
+    R3[storm_events]:::raw
+    R4[farmer_pen_log]:::raw
+  end
+
+  subgraph STG["Staging - views, 1:1 clean/cast"]
+    S1[stg_node_daily_activity]:::stg
+    S2[stg_node_pen_assignments]:::stg
+    S3[stg_storm_events]:::stg
+    S4[stg_farmer_pen_logs]:::stg
+  end
+
+  subgraph INT["Intermediate - views, business logic"]
+    subgraph A["Activity track"]
+      I1[int_dates]:::int
+      I2[int_node_days_assigned]:::int
+      I3[int_pen_daily_activity]:::int
+    end
+    subgraph B["Fish-count track"]
+      I4[int_fish_counts_validated]:::int
+      I5[int_pen_daily_fish_count]:::int
+    end
+    subgraph C["Storm track"]
+      I6[int_storm_episodes]:::int
+      I7[int_storm_daily_exposure]:::int
+      I8[int_site_daily_storm_summary]:::int
+      I9[int_pen_storm_daily_analysis]:::int
+      I10[int_storm_pen_baselines]:::int
+    end
+  end
+
+  subgraph MART["Marts - tables"]
+    D[dims: date, pen, site, storm episode]:::mart
+    F1[fct_pen_daily_activity]:::mart
+    F2[fct_pen_storm_analysis]:::mart
+    F3[fct_pen_storm_baseline]:::mart
+  end
+
+  R1 --> S1
+  R2 --> S2
+  R3 --> S3
+  R4 --> S4
+  S1 --> I1
+  S1 --> I2
+  S3 --> I1
+  S2 --> I2
+  I2 --> I3
+  S4 --> I4
+  I4 --> I5
+  S3 --> I6
+  I1 --> I7
+  S3 --> I7
+  I7 --> I8
+  I3 --> I9
+  I8 --> I9
+  I6 --> I9
+  I9 --> I10
+  I1 --> D
+  I4 --> D
+  S2 --> D
+  I6 --> D
+  I3 --> F1
+  I5 --> F1
+  I8 --> F1
+  I5 --> F2
+  I9 --> F2
+  I10 --> F3

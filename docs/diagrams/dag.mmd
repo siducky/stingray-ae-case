@@ -1,0 +1,38 @@
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Helvetica','fontSize':'14px'}}}%%
+flowchart LR
+
+  int_dates --> dim_date
+  int_dates --> int_storm_daily_exposure
+  int_fish_counts_validated --> dim_pen
+  int_fish_counts_validated --> int_pen_daily_fish_count
+  int_node_days_assigned --> int_pen_daily_activity
+  int_pen_daily_activity --> fct_pen_daily_activity
+  int_pen_daily_activity --> int_pen_storm_daily_analysis
+  int_pen_daily_fish_count --> fct_pen_daily_activity
+  int_pen_daily_fish_count --> fct_pen_storm_analysis
+  int_pen_storm_daily_analysis --> fct_pen_storm_analysis
+  int_pen_storm_daily_analysis --> int_storm_pen_baselines
+  int_site_daily_storm_summary --> fct_pen_daily_activity
+  int_site_daily_storm_summary --> int_pen_storm_daily_analysis
+  int_storm_daily_exposure --> int_site_daily_storm_summary
+  int_storm_episodes --> dim_storm_episode
+  int_storm_episodes --> int_pen_storm_daily_analysis
+  int_storm_pen_baselines --> fct_pen_storm_baseline
+  stg_stingray__farmer_pen_logs --> int_fish_counts_validated
+  stg_stingray__node_daily_activity --> int_dates
+  stg_stingray__node_daily_activity --> int_node_days_assigned
+  stg_stingray__node_daily_activity --> int_pen_daily_fish_count
+  stg_stingray__node_pen_assignments --> dim_pen
+  stg_stingray__node_pen_assignments --> dim_site
+  stg_stingray__node_pen_assignments --> int_node_days_assigned
+  stg_stingray__storm_events --> dim_site
+  stg_stingray__storm_events --> int_dates
+  stg_stingray__storm_events --> int_storm_daily_exposure
+  stg_stingray__storm_events --> int_storm_episodes
+
+  classDef stg  fill:#e3f2fd,stroke:#1e88e5,color:#0d47a1
+  classDef int  fill:#fff3e0,stroke:#fb8c00,color:#e65100
+  classDef mart fill:#e8f5e9,stroke:#43a047,color:#1b5e20
+  class stg_stingray__farmer_pen_logs,stg_stingray__node_daily_activity,stg_stingray__node_pen_assignments,stg_stingray__storm_events stg
+  class int_dates,int_fish_counts_validated,int_node_days_assigned,int_pen_daily_activity,int_pen_daily_fish_count,int_pen_storm_daily_analysis,int_site_daily_storm_summary,int_storm_daily_exposure,int_storm_episodes,int_storm_pen_baselines int
+  class dim_date,dim_pen,dim_site,dim_storm_episode,fct_pen_daily_activity,fct_pen_storm_analysis,fct_pen_storm_baseline mart
