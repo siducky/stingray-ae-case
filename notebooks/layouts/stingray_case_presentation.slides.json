@@ -1,0 +1,78 @@
+{
+  "type": "slides",
+  "data": {
+    "cells": [
+      {
+        "type": "skip"
+      },
+      {
+        "type": "skip"
+      },
+      {
+        "type": "skip"
+      },
+      {
+        "type": "skip"
+      },
+      {
+        "type": "skip"
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nThe case is a stakeholder-translation exercise, not a dashboard build.\n\nSAY\n\"Kari asked whether storms change laser activity. Over the next 20 minutes I'll show how I turned that into a metric that can be trusted, a dbt model that answers it, and what two weeks of data honestly supports.\"\n\nTRANSITION\nStart with what she actually asked for."
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\n\"Less active\" hides two different phenomena: the laser shooting less, or the node not running.\n\nSAY\n- Read the quote. Farmers have two competing explanations: equipment in rough weather, or different fish behaviour.\n- The reframe that shapes everything: activity has to be split into uptime and a rate per operating hour, and we need to know how complete the reporting is.\n- There is a customer meeting in a few weeks, so the output must be a dashboard Kari can drive herself, not a one-off analysis.\n\nTRANSITION\n\"That's the question. Here is the data we have to answer it with.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nFour source tables, four grains. The challenge is temporal, not volume.\n\nSAY\n- Walk the grain column: node-day, deployment interval, storm per site, fish-count entry.\n- node_daily_activity has no site or pen; node_pen_assignment is the bridge, and it is time-ranged.\n- Storms attach at site level; farmer logs at pen level.\n- There are no site names, pen metadata or geography in the extract \u2014 I deliberately did not invent any.\n- Exploration lives in notebooks/01_data_exploration.py; this deck carries only the findings that changed a decision.\n\nTRANSITION\n\"Small data, but it fights back in five specific ways.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nEvery data-quality finding became a modelling decision, not a footnote.\n\nSAY\n- N05 moved S02/P202 -> S01/P103 on 8 Oct. Joining on node_id alone would credit its first week to P103.\n- Missing is not zero: N05 has no record on its move day, N04 none on 12 Oct. But genuine zeros exist too \u2014 N01 and N03 report uptime 0 at the storm peak. The model must keep those apart.\n- One 36-hour storm lands on three local days: 300 / 1,440 / 420 minutes.\n- P102 has two entries on 8 Oct, including a corrected count. Latest wins, deterministically.\n- P201's 1,852,000 count is 10x the next largest. Flag it and withhold the snapshot \u2014 never substitute silently.\n\nTRANSITION\n\"Those decisions define the metrics.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nRates, not counts; total-over-total; missing stays null.\n\nSAY\n- Raw shots compare the wrong thing across pens with different uptime and populations.\n- The period rate is total shots / total uptime x 60. Never an average of daily rates: a zero-uptime day would otherwise contribute a meaningless weight.\n- Fish counts give context (P101 172k vs P103 96k) but are manual snapshots, stale after 7 days, and sometimes implausible. They are not a denominator in this build.\n- Reporting completeness is reported node-days / expected node-days.\n- State the assumption: activity_date is a local Oslo day, and uptime is node on-time, not proof the laser was armed.\n\nTRANSITION\n\"Metric defined. Now the comparison windows.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nThe episode window is wall-clock; exposure is clipped minutes per local day.\n\nSAY\n- Three episodes: S01 5-7 Oct high (36 h), S02 9-10 Oct moderate (6 h), S02 14 Oct low (3 h).\n- Before = 3 local dates before the start, during = every episode date, after = 3 local dates after the end. A partially affected day counts as during.\n- Look at the chart: ST-0041 is one storm but three days of exposure, and ST-0043 ends at 01:30 local so it claims only 14 Oct.\n- P202 drops out of S02 after the node move: a pen only joins an episode when it had nodes at that site on a during date.\n- Reliability gate: S01 comparisons sit on 100% completeness before and during; P103's after-window is 66.7% because of the move.\n\nTRANSITION\n\"Those rules live in the intermediate layer. Here is the architecture.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nLayer boundaries are the design; each hard problem has exactly one home.\n\nSAY\n- Raw CSV -> four staging views (rename, cast, UTC, source tests) -> ten intermediate models in three tracks -> seven marts -> Power BI, Python, R.\n- Staging is deliberately 1:1 and boring. Intermediate owns time, assignment, fish validation and storms. Marts are dimensional.\n- Then the five ways this could go wrong: effective-dated assignment, join fan-out, local-day exposure, missing vs zero, and fish-count validation. Each has a single owner in the DAG.\n- Every arrow on this slide exists in the dbt DAG; nothing is aspirational.\n\nTRANSITION\n\"Let's look at what that produced as a data model.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nThree facts because three grains; conformed dimensions tie them together.\n\nSAY\n- fct_pen_daily_activity: site x pen x date, the additive source of truth for shots, uptime and detections.\n- fct_pen_storm_analysis: pen x episode x date, for the before/during/after view.\n- fct_pen_storm_baseline: pen x episode, with weighted rates and percentage change.\n- Why separate? A single wide fact would either duplicate the daily rows or force users to average daily rates - exactly the error we avoided.\n- Point at the read-before-aggregating card: summing the storm analysis double-counts because one episode's after is the next one's before; storm_minutes is site-day repeated per pen.\n\nTRANSITION\n\"A few lines of SQL show the decisions behind these tables.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nThe correctness lives in three small pieces of SQL.\n\nSAY\n- The spine: generate_series over the clipped assignment interval, then a left join to activity, so a missing day stays null and visible.\n- Storm exposure: greatest/least clipping to DST-aware day boundaries, half-open interval, zero-minute rows dropped.\n- The period tag and the weighted rate: total shots / total uptime x 60.\n- These are excerpts, elided with ..., from int_node_days_assigned, int_storm_daily_exposure and int_pen_storm_daily_analysis.\n- Tests pin them: unique grain per fact, relationships on every foreign key, a rate is null without uptime, and unit tests for N05's move and the 300/1,440/420 split.\n\nTRANSITION\n\"So what does it actually say about the storms?\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nThe high-severity storm coincides with a real drop in the rate, and a larger drop in volume because uptime goes to zero.\n\nSAY\n- S01, shots per operating hour during the storm versus each pen's own three quiet days: P101 -24.0%, P102 -48.5%, P103 -8.3%.\n- Detections fall similarly: -23.3%, -43.7%, -11.3%. Shots per detection stays in a narrow 1.27-1.38 band, so per-lice efficiency does not collapse.\n- The uptime fact that matters: P101 and P103 report zero uptime on 6 Oct. Because the rate only counts uptime, the rate drop is not explained by downtime alone - but total shots fell much further (65% / 48% / 78%). That gap between rate and volume is the outage.\n- P103 also has the node move on 8 Oct, which is why the after-window is flagged and incomplete.\n- S02's milder episodes: P201 +2.6% and -3.3% - inside day-to-day noise.\n- Say it explicitly: two weeks and one high-severity episode support co-movement, not causation.\n\nTRANSITION\n\"How would Kari use this without me in the room?\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nThe dashboard is a decision tool, with data quality visible rather than buried.\n\nSAY\n- Four KPI cards are live from the warehouse: 34,862 shots, 1,359.5 operating hours, 25,493 detections, 96.8% reporting completeness (61 of 63 node-days).\n- The layout maps one-to-one to Kari's questions: timeline with storm bands, before/during/after, pen comparison, site comparison, filters.\n- A quality badge is part of the design: never show a rate without its completeness.\n- Power BI model: import the seven marts, relate each dimension to each fact one-to-many, single direction, measures per fact. No fact-to-fact relationship.\n\nTRANSITION\n\"What still needs checking before this goes to a customer?\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nTested, but explicit about assumptions and the causal limit.\n\nSAY\n- 21 models, 336 generic/singular tests and 11 unit tests: 346 pass, one intentional warn - P201's implausible count.\n- Tests cover uniqueness, foreign keys, grain, ranges, null semantics, storm-day length, episode duplication and the hard temporal cases.\n- Four things only Kari or the data owners can confirm: the day boundary, whether N03 was off or disabled, what \"less active\" means, and whether fish counts are whole-pen after transfers.\n- Next: intraday telemetry for short storms, more episodes before any statistical test, site timezone lookup, and the production port with contracts and freshness.\n\nTRANSITION\n\"So, to close.\""
+      },
+      {
+        "type": "slide",
+        "speakerNotes": "KEY MESSAGE\nDeliver a model that answers the question and states its limits.\n\nSAY\n- Three deliverables: a tested star schema, an answer Kari can put in front of a farmer, and an agreed next step.\n- Land the line: the signal is in the data; the cause is not yet.\n- Invite questions - especially on the day-boundary assumption and the uptime definition.\n\nTRANSITION\nn/a - open the floor."
+      }
+    ],
+    "deck": {
+      "transition": "fade",
+      "verticalAlign": "center"
+    }
+  }
+}

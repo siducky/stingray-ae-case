@@ -1,0 +1,59 @@
+/* Deck theme — notebooks/stingray_case_presentation.py
+   Proposed palette, not verified Stingray brand colours:
+   navy #0B1F33 · ocean #123B52 · teal #16A6A1 · seafoam #D9F0EB
+   coral #FF765E · background #F5F8FA · ink #172B3A */
+
+.reveal-viewport {
+  background-color: #f5f8fa;
+}
+
+.reveal .slides section {
+  font-family:
+    "Inter", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial,
+    sans-serif;
+  color: #172b3a;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Dark section slides: title and close */
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_title"]),
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_closing"]) {
+  background-color: #0b1f33;
+}
+
+/* Keep prose spacing tight so slides do not scroll */
+.reveal .slides section .prose p {
+  margin: 0.35em 0;
+}
+
+.reveal .slides section .prose h1,
+.reveal .slides section .prose h2,
+.reveal .slides section .prose h3 {
+  margin: 0.2em 0;
+}
+
+/* Numerals align in tables and KPIs */
+.reveal .slides section table,
+.reveal .slides section td {
+  font-variant-numeric: tabular-nums;
+}
+
+.reveal .slides section code {
+  font-variant-ligatures: none;
+}
+
+/* Quiet slide number, when reveal's controls are shown */
+.reveal .slide-number {
+  background: transparent;
+  color: #5b7285;
+  font-size: 11px;
+}
+
+/* Reveal progress bar in the deck's teal rather than the default blue */
+.reveal .progress {
+  background: rgba(11, 31, 51, 0.08);
+}
+
+.reveal .progress span {
+  background: #16a6a1;
+}
