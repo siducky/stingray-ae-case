@@ -1,0 +1,48 @@
+version: 2
+
+sources:
+  - name: stingray
+    description: >
+      Raw Stingray extracts. In production these land in Snowflake (RAW.STINGRAY);
+      locally they are read straight from data/raw/*.csv by DuckDB. Every column is
+      read as varchar so that all typing happens explicitly in staging.
+    config:
+      meta:
+        external_location: "read_csv('data/raw/{name}.csv', header = true, all_varchar = true)"
+    tables:
+      - name: node_daily_activity
+        description: One row per node per day with lice detections, laser shots and uptime.
+        columns:
+          - name: node_id
+          - name: activity_date
+          - name: lice_detections
+          - name: shots_fired
+          - name: uptime_minutes
+
+      - name: node_pen_assignment
+        description: Where each node was deployed and when (SCD2-style validity ranges, valid_to inclusive, null = current).
+        columns:
+          - name: node_id
+          - name: site_id
+          - name: pen_id
+          - name: valid_from
+          - name: valid_to
+
+      - name: storm_events
+        description: Storms registered per farm site, timestamps in ISO-8601 UTC (Z suffix).
+        columns:
+          - name: storm_id
+          - name: site_id
+          - name: start_ts
+          - name: end_ts
+          - name: severity
+
+      - name: farmer_pen_log
+        description: Fish counts per pen entered by hand by farmers. log_ts is a naive local timestamp.
+        columns:
+          - name: log_id
+          - name: pen_id
+          - name: log_ts
+          - name: fish_count
+          - name: entered_by
+          - name: comment

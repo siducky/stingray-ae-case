@@ -1,0 +1,46 @@
+version: 2
+
+unit_tests:
+  - name: test_assignment_valid_until_is_exclusive_and_open_ended
+    description: Inclusive valid_to becomes valid_to + 1 day; null valid_to becomes the open-end sentinel and is current.
+    model: stg_stingray__node_pen_assignments
+    given:
+      - input: source('stingray', 'node_pen_assignment')
+        format: sql
+        rows: |
+          select 'N05' as node_id, 'S02' as site_id, 'P202' as pen_id, '2026-05-15' as valid_from, '2026-10-07' as valid_to
+          union all
+          select 'N05' as node_id, 'S01' as site_id, 'P103' as pen_id, '2026-10-08' as valid_from, null as valid_to
+          union all
+          select 'N06' as node_id, 'S01' as site_id, 'P104' as pen_id, '2026-11-01' as valid_from, '' as valid_to
+    expect:
+      rows:
+        - {node_id: N05, pen_id: P202, valid_from_date: 2026-05-15, valid_to_date: 2026-10-07, valid_until_date: 2026-10-08, is_current_assignment: false}
+        - {node_id: N05, pen_id: P103, valid_from_date: 2026-10-08, valid_to_date: null, valid_until_date: 9999-12-31, is_current_assignment: true}
+        - {node_id: N06, pen_id: P104, valid_from_date: 2026-11-01, valid_to_date: null, valid_until_date: 9999-12-31, is_current_assignment: true}
+
+  - name: test_storm_timestamps_are_utc_and_duration_is_hours
+    model: stg_stingray__storm_events
+    given:
+      - input: source('stingray', 'storm_events')
+        format: sql
+        rows: |
+          select 'ST-0041' as storm_id, ' S01 ' as site_id, '2026-10-05T17:00:00Z' as start_ts, '2026-10-07T05:00:00Z' as end_ts, ' High ' as severity
+    expect:
+      rows:
+        - {storm_id: ST-0041, site_id: S01, storm_started_at: '2026-10-05 17:00:00', storm_ended_at: '2026-10-07 05:00:00', storm_duration_hours: 36.0, severity: high}
+
+  - name: test_farmer_log_local_time_converted_to_utc_dst_aware
+    description: Oslo is UTC+2 in October (CEST) and UTC+1 in January (CET). Empty comments become null.
+    model: stg_stingray__farmer_pen_logs
+    given:
+      - input: source('stingray', 'farmer_pen_log')
+        format: sql
+        rows: |
+          select '1001' as log_id, 'P101' as pen_id, '2026-10-01T08:12:00' as log_ts, '172400' as fish_count, 'farmer_vik' as entered_by, '' as comment
+          union all
+          select '9001' as log_id, 'P101' as pen_id, '2026-01-15T08:00:00' as log_ts, '170000' as fish_count, 'farmer_vik' as entered_by, ' corrected count ' as comment
+    expect:
+      rows:
+        - {log_id: 1001, logged_at: '2026-10-01 06:12:00', logged_local_date: 2026-10-01, fish_count: 172400, log_comment: null}
+        - {log_id: 9001, logged_at: '2026-01-15 07:00:00', logged_local_date: 2026-01-15, fish_count: 170000, log_comment: corrected count}

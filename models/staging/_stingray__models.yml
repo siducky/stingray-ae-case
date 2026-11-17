@@ -1,0 +1,189 @@
+version: 2
+
+models:
+  - name: stg_stingray__node_daily_activity
+    description: >
+      One row per node per reported day.
+      A missing row means "no record received" and is NOT equivalent to a zero-activity day.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [node_id, activity_date]
+    columns:
+      - name: node_activity_id
+        description: Surrogate key, hash of node_id and activity_date.
+        data_tests: [unique, not_null]
+      - name: node_id
+        description: Stingray node identifier.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_stingray__node_pen_assignments')
+                field: node_id
+      - name: activity_date
+        description: Day the activity was recorded (assumed Europe/Oslo).
+        data_tests: [not_null]
+      - name: lice_detection_count
+        description: Number of sea lice detected by the node's camera that day.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: laser_shot_count
+        description: Number of laser shots fired that day.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: uptime_minutes
+        description: Minutes the node was operational that day. Max 1500 allows the 25-hour DST-end day.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1500
+
+  - name: stg_stingray__node_pen_assignments
+    description: >
+      One row per node deployment period. Source valid_to is inclusive and null for the current
+      assignment; valid_until_date is used for all joins.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [node_id, valid_from_date]
+      - dbt_utils.expression_is_true:
+          name: assert_assignment_range_is_positive
+          arguments:
+            expression: "valid_until_date > valid_from_date"
+      - dbt_utils.mutually_exclusive_ranges:
+          name: assert_node_has_one_assignment_at_a_time
+          arguments:
+            lower_bound_column: valid_from_date
+            upper_bound_column: valid_until_date
+            partition_by: node_id
+            gaps: allowed
+    columns:
+      - name: assignment_id
+        description: Surrogate key, hash of node_id and valid_from_date.
+        data_tests: [unique, not_null]
+      - name: node_id
+        description: Stingray node identifier.
+        data_tests:
+          - not_null
+          - unique:
+              name: assert_node_has_at_most_one_current_assignment
+              config:
+                where: "is_current_assignment"
+      - name: site_id
+        description: Farm site the node was deployed at during this period.
+        data_tests: [not_null]
+      - name: pen_id
+        description: Pen the node was deployed in during this period.
+        data_tests: [not_null]
+      - name: valid_from_date
+        description: First day of the deployment (inclusive).
+        data_tests: [not_null]
+      - name: valid_to_date
+        description: Last day of the deployment (inclusive) as delivered by source; null = still deployed.
+      - name: valid_until_date
+        description: Exclusive upper bound (valid_to_date + 1 day, or 9999-12-31 when current). Join with activity_date >= valid_from_date and activity_date < valid_until_date.
+        data_tests: [not_null]
+      - name: is_current_assignment
+        description: Flag to check if node is currently assigned. True when the source valid_to is null.
+        data_tests: [not_null]
+
+  - name: stg_stingray__storm_events
+    description: One row per registered storm event per site. Timestamps converted to naive UTC.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          name: assert_storm_ends_after_it_starts
+          arguments:
+            expression: "storm_ended_at > storm_started_at"
+    columns:
+      - name: storm_id
+        description: Storm event identifier.
+        data_tests: [unique, not_null]
+      - name: site_id
+        description: Farm site affected by the storm.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_stingray__node_pen_assignments')
+                field: site_id
+              config:
+                severity: warn
+      - name: storm_started_at
+        description: Storm start, UTC.
+        data_tests: [not_null]
+      - name: storm_ended_at
+        description: Storm end, UTC.
+        data_tests: [not_null]
+      - name: storm_duration_hours
+        description: Storm duration in hours.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+      - name: severity
+        description: Registered storm severity (ordinal low < moderate < high).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['low', 'moderate', 'high']
+
+  - name: stg_stingray__farmer_pen_logs
+    description: >
+      One row per manual farmer log entry. log_ts is a naive local timestamp, interpreted in
+      var('farmer_log_timezone') and converted to UTC. A pen can legitimately have several entries
+      on the same day (for example a correction),deciding which entry wins is an intermediate-layer rule. Corrections and suspect counts are
+      kept here and resolved downstream.
+    columns:
+      - name: log_id
+        description: Log entry identifier.
+        data_tests: [unique, not_null]
+      - name: pen_id
+        description: Unique identifier for pen.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_stingray__node_pen_assignments')
+                field: pen_id
+              config:
+                severity: warn
+      - name: logged_at
+        description: Time of entry, UTC.
+        data_tests: [not_null]
+      - name: logged_at_local
+        description: Time of entry as entered (local, naive).
+        data_tests: [not_null]
+      - name: logged_local_date
+        description: Local calendar date of the entry.
+        data_tests: [not_null]
+      - name: fish_count
+        description: Fish count entered by the farmer. Values above 1,000,000 (10x the next largest count) are flagged as implausible.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+          - dbt_utils.accepted_range:
+              name: assert_fish_count_is_plausible
+              arguments:
+                max_value: 1000000
+              config:
+                severity: warn
+      - name: entered_by
+        description: Farmer user who entered the log.
+        data_tests: [not_null]
+      - name: log_comment
+        description: Free-text comment, null when empty.

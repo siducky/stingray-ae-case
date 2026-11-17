@@ -8,10 +8,16 @@ model-paths: ["models"]
 analysis-paths: ["analyses"]
 test-paths: ["tests"]
 macro-paths: ["macros"]
+seed-paths: ["seeds"]
 
 clean-targets:
   - "target"
   - "dbt_packages"
+
+vars:
+  # Timezone used to interpret naive local timestamps entered by farmers (farmer_pen_log.log_ts).
+  # Single zone by design; multi-zone handling is listed in docs/limitations.md.
+  farmer_log_timezone: 'Europe/Oslo'
 
 models:
   stingray_case:
