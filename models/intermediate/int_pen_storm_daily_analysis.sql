@@ -1,38 +1,19 @@
-{#-
-    One row per pen, storm episode and local calendar date within the
-    analytical window (before / during / after the episode).
-
-    Window definitions (local calendar dates, configurable):
-      - before: the storm_baseline_days (default 3) dates immediately
-        preceding episode_start_date;
-      - during: all dates from episode_start_date through episode_end_date
-        (a partially affected day still counts as during);
-      - after: the storm_post_days (default 3) dates immediately following
-        episode_end_date.
-
-    Dates are generated arithmetically from the episode bounds rather than
-    joined from int_dates on purpose: the before/after windows extend
-    beyond the source-derived spine, and joining the spine would silently
-    truncate them.
-
-    Grain control - no fan-out:
-      - episodes are unique per (storm_episode_id);
-      - int_pen_daily_activity is unique per (site_id, pen_id, activity_date)
-        and is ALSO the pen/site/date spine: a pen appears on a date only
-        when it had assigned nodes at that site on that date (historical
-        assignments respected);
-      - int_site_daily_storm_summary is unique per (site_id, activity_date).
-    So each output row is exactly one pen-day of one episode.
-
-    storm_minutes / storm_event_count come from the site-day storm summary
-    (actual exposure), not from the episode span: quiet gaps inside an
-    episode contribute nothing. The storm registry is complete, so a
-    site-day with no storm row is a true zero, coalesced here to 0.
-
-    shots_per_operating_hour is null when uptime is zero or missing - a
-    zero-uptime day never produces an artificial zero rate. This model
-    classifies and exposes; it does not attribute causation.
--#}
+-- Grain: one row per pen, storm episode and date in the analytical
+-- window: before (storm_baseline_days dates before episode_start_date),
+-- during (all episode dates; partially affected days count), after
+-- (storm_post_days dates after episode_end_date). Windows are generated
+-- arithmetically - they extend beyond the int_dates spine.
+-- Pen membership: a pen belongs to an episode only if it had assigned
+-- nodes at the episode's site on at least one DURING date, so pens that
+-- moved away before the storm (e.g. P202 after N05 left on 2026-10-08)
+-- are excluded from the whole window. Within the window the pen still
+-- appears only on dates where it had assigned nodes (historical
+-- assignments respected). All joins are 1:1 at their grain - no fan-out.
+-- storm_minutes/storm_event_count are actual site-day exposure (0 when
+-- storm-free), independent of the classification.
+-- Rates (shots/detections per operating hour, shots per detection) are
+-- null when their denominators are zero or missing.
+-- Descriptive only - no causal claim.
 
 with
 
@@ -72,15 +53,29 @@ episode_days as (
     ) as days(day)
 ),
 
+-- Episode membership: pens with assigned nodes at the episode's site on
+-- at least one during date.
+episode_pens as (
+    select distinct
+        episode_days.storm_episode_id,
+        episode_days.site_id,
+        pen_activity.pen_id
+    from episode_days
+    inner join pen_activity
+        on pen_activity.site_id = episode_days.site_id
+        and pen_activity.activity_date = episode_days.activity_date
+    where episode_days.storm_period = 'during'
+),
+
 final as (
     select
         {{ dbt_utils.generate_surrogate_key(
-            ['episode_days.storm_episode_id', 'pen_activity.pen_id', 'episode_days.activity_date']
+            ['episode_days.storm_episode_id', 'episode_pens.pen_id', 'episode_days.activity_date']
         ) }}
             as pen_storm_day_id,
         episode_days.storm_episode_id,
         episode_days.site_id,
-        pen_activity.pen_id,
+        episode_pens.pen_id,
         episode_days.activity_date,
         episode_days.storm_period,
         date_diff(
@@ -93,17 +88,20 @@ final as (
         pen_activity.laser_shot_count,
         pen_activity.lice_detection_count,
         pen_activity.uptime_minutes,
-        case
-            when pen_activity.uptime_minutes > 0
-                then cast(pen_activity.laser_shot_count as double)
-                    / pen_activity.uptime_minutes * 60
-        end as shots_per_operating_hour,
-        pen_activity.reporting_completeness
+        pen_activity.shots_per_operating_hour,
+        pen_activity.detections_per_operating_hour,
+        pen_activity.shots_per_detection,
+        pen_activity.reporting_completeness,
+        pen_activity.node_ids,
+        pen_activity.has_node_set_change
     from episode_days
-    -- Pen/site/date spine: only pens with assigned nodes at the episode's
-    -- site on that date (historical assignments respected).
+    inner join episode_pens
+        on episode_pens.storm_episode_id = episode_days.storm_episode_id
+    -- Pen/site/date spine: only dates where the pen had assigned nodes
+    -- at the episode's site (historical assignments respected).
     inner join pen_activity
         on pen_activity.site_id = episode_days.site_id
+        and pen_activity.pen_id = episode_pens.pen_id
         and pen_activity.activity_date = episode_days.activity_date
     -- Actual exposure per site-day, independent of the period
     -- classification: a before/after day can carry another episode's

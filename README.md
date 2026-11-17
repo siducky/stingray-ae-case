@@ -1,10 +1,92 @@
 # Stingray Case Study — dbt Analytics Engineering
 
 Local DuckDB warehouse (`data/warehouse/stingray.duckdb`) built with dbt from the raw extracts in
-`data/raw/`. Layered staging → intermediate → (planned) marts. See `docs/limitations.md` and
+`data/raw/`. Layered staging → intermediate → marts. See `docs/limitations.md` and
 `docs/production_portability.md` for scope decisions and porting notes.
 
-Run everything through `uv run`, e.g. `uv run dbt build --profiles-dir .`.
+Run everything through `uv run` (the project virtualenv is managed by uv).
+
+## Getting started
+
+```bash
+# 1. Install the environment (creates .venv from pyproject.toml + uv.lock)
+uv sync
+
+# 2. Verify the dbt/DuckDB connection
+uv run dbt debug --profiles-dir .
+
+# 3. Build all layers (staging -> intermediate -> marts) and run all tests
+uv run dbt build --profiles-dir .
+```
+
+### Common commands
+
+```bash
+# Build or test a single layer / model
+uv run dbt build --select staging --profiles-dir .
+uv run dbt build --select intermediate --profiles-dir .
+uv run dbt build --select marts --profiles-dir .
+uv run dbt run --select int_pen_daily_fish_count --profiles-dir .
+
+# Tests only
+uv run dbt test --profiles-dir .
+
+# Generate and serve the docs + lineage graph (http://localhost:8080)
+uv run dbt docs generate --profiles-dir .
+uv run dbt docs serve --profiles-dir . --port 8080 --no-browser
+
+# Lint / format Python and Marimo notebook files
+uv run ruff check --fix . && uv run ruff format .
+
+# Validate notebooks
+uv run marimo check notebooks/
+
+# Edit a notebook interactively
+uv run marimo edit notebooks/01_data_exploration.py
+```
+
+The lineage graph is available in the served docs (left-hand "graph" icon, or the circular-nodes
+view) and statically in `target/manifest.json`.
+
+### Configuration overrides
+
+Analytical thresholds are `vars` in `dbt_project.yml` (see the table below) and can be overridden
+per run:
+
+```bash
+uv run dbt build --select intermediate --profiles-dir . \
+  --vars '{fish_count_max_age_days: 14, storm_baseline_days: 5}'
+```
+
+**Note:** the warehouse is a single DuckDB file — make sure no other tool (e.g. DBeaver) holds it
+open, or `dbt build` fails with a lock error.
+
+## Executive summary (for Kari)
+
+**Question: did laser activity change during the October storms?** Yes — but the data also says
+how carefully to read it.
+
+- **S01, high-severity episode (Oct 5–7):** shots per operating hour fell during the storm —
+  P101 **−24.0%**, P102 **−48.5%**, P103 **−8.3%** vs each pen's own quiet-weather baseline.
+  Detection rate fell similarly (−23.3%, −43.7%, −11.3%), while shots-per-detection stayed flat
+  (~1.3): the cameras saw fewer lice per hour, but the laser worked no less efficiently per
+  lice found.
+- **Uptime, not only behaviour:** P101 and P103 reported **zero uptime** on Oct 6, the peak of
+  the storm — the drop is at least partly the system being down, not the system choosing not
+  to shoot. Reporting completeness flags exactly these days.
+- **Caveat for P103:** its node changed (N03 → N05) on Oct 8, the day *after* the episode —
+  `has_node_change_in_window` marks it, and Oct 8 shows completeness 0 (no telemetry on the
+  move-day).
+- **Fish counts around the storm:** the P101 farmer logged "some mortality after storm"
+  (172,400 → 171,100 by Oct 8, −1,300). P202 moved ~40k fish to P201 on Oct 8. P201's Oct 8
+  log (1,852,000) is flagged implausible and that pen has no snapshot from Oct 8 onward.
+- **S02's two milder episodes (Oct 9–10 moderate, Oct 14 low):** P201 moved −3.3% / +0.2% vs
+  baseline — within noise. P202 left the site before the storms (N05 moved on Oct 8) and is
+  correctly excluded from those episodes.
+
+**Data reliability:** all S01 comparisons rest on 100% reporting completeness in the baseline
+and during periods. Bottom line: the high-severity storm coincided with a large activity
+drop that is partly explained by downtime; the milder storms show no clear effect.
 
 ## Lineage
 
@@ -23,6 +105,18 @@ data/raw (CSV, all_varchar)
 │                                                     int_storm_pen_baselines                                │
 │                                                                                                            int_dates ◄──────────┘
 └─ farmer_pen_log.csv ──────────► stg_stingray__farmer_pen_logs ──► int_fish_counts_validated ──► int_pen_daily_fish_count
+                                                                                      │
+                                                                                      ▼
+                                              fct_pen_daily_activity ◄── int_pen_daily_activity / int_site_daily_storm_summary
+
+Mart models (7):
+  dim_date            ◄─ int_dates
+  dim_site            ◄─ stg_stingray__node_pen_assignments + stg_stingray__storm_events
+  dim_pen             ◄─ stg_stingray__node_pen_assignments + int_fish_counts_validated
+  dim_storm_episode   ◄─ int_storm_episodes
+  fct_pen_daily_activity       ◄─ int_pen_daily_activity + int_pen_daily_fish_count + int_site_daily_storm_summary
+  fct_pen_storm_analysis       ◄─ int_pen_storm_daily_analysis + int_pen_daily_fish_count
+  fct_pen_storm_baseline       ◄─ int_storm_pen_baselines
 ```
 
 `int_dates` is built from `stg_stingray__node_daily_activity` + `stg_stingray__storm_events` and
@@ -30,6 +124,104 @@ provides the shared DST-aware local-day spine. `int_pen_storm_daily_analysis` al
 `int_pen_daily_activity` as its pen/site/date spine (historical assignments respected).
 `stg_stingray__node_daily_activity` is referenced by `int_pen_daily_fish_count` only to define the
 deterministic reporting window.
+
+## Mart layer (star schema)
+
+```
+                        dim_date
+                       1      1 \                        dim_storm_episode
+                       |         \                     1 /         |
+                       *          *                     /          *
+        fct_pen_daily_activity   fct_pen_storm_analysis             fct_pen_storm_baseline
+        (site × pen × date)      (pen × episode × date)             (pen × episode)
+                       ^          ^         ^          ^                    ^
+                    1  |       1  |      1  |       1  |                 1  |
+                       |          |         |          |                    |
+                    dim_site   dim_pen   dim_site  dim_storm_episode   dim_site / dim_pen
+```
+
+All dimension → fact relationships are **one-to-many, single-direction** (dimension filters fact).
+No many-to-many, no bidirectional filtering. `dim_date`, `dim_site` and `dim_pen` are conformed
+across all facts. The two storm facts are grain-matched partners: `fct_pen_storm_baseline` joins
+`fct_pen_storm_analysis` 1:1 on `storm_episode_key + pen_key`.
+
+### Grain and key summary
+
+| Table | Grain | Primary key | Foreign keys |
+|---|---|---|---|
+| `dim_date` | one row per calendar date | `date_key` (int YYYYMMDD) | — |
+| `dim_site` | one row per site | `site_key` | — |
+| `dim_pen` | one row per pen | `pen_key` | — |
+| `dim_storm_episode` | one row per storm episode | `storm_episode_key` | — |
+| `fct_pen_daily_activity` | one row per site × pen × date | `pen_day_id` | `date_key`, `site_key`, `pen_key` |
+| `fct_pen_storm_analysis` | one row per pen × episode × analytical date | `pen_storm_day_id` | `date_key`, `site_key`, `pen_key`, `storm_episode_key` |
+| `fct_pen_storm_baseline` | one row per pen × episode | `storm_pen_baseline_id` | `site_key`, `pen_key`, `storm_episode_key` |
+
+Natural identifiers (`site_id`, `pen_id`, `activity_date`) are retained in both facts so the
+tables read without joins. `dim_pen.current_site_id` is a current-state attribute only —
+historical site attribution lives per day in the facts (`has_multiple_sites` flags pens where it
+matters). No Type 2 dimensions: the only historically varying property (pen → site) is already
+captured per day in the facts.
+
+### Measure additivity rules (read before aggregating)
+
+- `fct_pen_daily_activity` is the **additive pen-day source of truth** for shots, detections,
+  uptime and reporting completeness.
+- `fct_pen_storm_analysis` covers episode windows only; a pen-day can appear in two episodes'
+  windows (one episode's after = the next episode's before), so **summing it double-counts**.
+  Its activity measures duplicate the daily fact's values — kept deliberately so storm-impact
+  questions are answered from one table.
+- `fct_pen_storm_baseline` is one row per pen-episode with before/during/after totals, rates
+  (total/total, never averages of daily rates) and completeness — never sum across its rows.
+- `storm_minutes` / `storm_event_count` are site-day exposure repeated per pen — not additive
+  across pens.
+- `fish_count` is a snapshot, not a flow: differences between dates are meaningful, sums are not.
+- All rates and percentages are rounded to 3 decimals where computed.
+
+### Query recipes (SQL)
+
+```sql
+-- Daily operations overview for a site
+select activity_date, pen_id, laser_shot_count, lice_detection_count, uptime_minutes,
+       reporting_completeness, fish_count
+from fct_pen_daily_activity
+where site_id = 'S01'
+order by activity_date, pen_id;
+
+-- Storm impact per pen: daily activity next to the baseline comparison
+select a.pen_id, a.activity_date, a.storm_period, a.storm_minutes, a.laser_shot_count,
+       a.shots_per_operating_hour, b.baseline_shots_per_operating_hour,
+       b.baseline_reporting_completeness
+from fct_pen_storm_analysis a
+join fct_pen_storm_baseline b using (storm_episode_key, pen_key)
+join dim_storm_episode using (storm_episode_key)
+where dim_storm_episode.max_severity = 'high'
+order by a.pen_id, a.activity_date;
+
+-- Data-quality check: pen-days with missing telemetry
+select site_id, pen_id, activity_date, expected_node_days, reported_node_days, node_ids
+from fct_pen_daily_activity
+where reporting_completeness < 1
+order by activity_date;
+
+-- Weekly rollup with calendar attributes (no date functions needed)
+select d.year_month, d.week_start_date, f.site_id,
+       sum(f.laser_shot_count) as shots, sum(f.uptime_minutes) as uptime,
+       avg(f.reporting_completeness) as avg_completeness
+from fct_pen_daily_activity f
+join dim_date d using (date_key)
+group by d.year_month, d.week_start_date, f.site_id
+order by d.week_start_date;
+```
+
+In Power BI: import the seven mart tables, relate each dimension's key to the matching fact key
+(one-to-many, single direction), and build measures per fact — pen-day totals from
+`fct_pen_daily_activity`, storm comparisons from `fct_pen_storm_baseline`. Both storm facts
+analyse at different grains, so relate them to the shared conformed dimensions
+(`dim_storm_episode`, `dim_pen`, `dim_site`) rather than to each other: a dimension selection
+filters all facts through the conformed keys. Do **not** model a direct fact-to-fact
+relationship — the 1:1 composite-key join (`storm_episode_key + pen_key`) between the storm
+facts is a SQL convenience, not a Power BI relationship.
 
 ## Intermediate models and grains
 
@@ -151,9 +343,10 @@ mechanism — see `docs/limitations.md` for the consequence.
 
 ## Tests
 
-`uv run dbt build --profiles-dir .` → **213 tests, 212 pass, 1 warn, 0 errors.**
+`uv run dbt build --profiles-dir .` → **316 tests, 315 pass, 1 warn, 0 errors.**
 The single warn is the pre-existing staging plausibility check that flags P201's 1,852,000 entry
-(deliberate). The intermediate layer contributes 154 tests (data, singular and unit):
+(deliberate). The intermediate layer contributes 154 tests and the mart layer 102
+(data + singular + unit):
 
 - Surrogate keys unique + not null on all ten models; grain uniqueness
   (`node_id`×`activity_date`, `storm_id`×`storm_date`, `site_id`×`activity_date`,
@@ -183,10 +376,12 @@ The single warn is the pre-existing staging plausibility check that flags P201's
 
 ## Deliberately not done (awaiting stakeholder review)
 
-- **No mart models.** The final analytical dataset (pen-day × storm × fish count) is not built yet.
-- **The before/during/after comparison is descriptive.** `int_storm_pen_baselines` reports changes
+- **The before/during/after comparison is descriptive.** `fct_pen_storm_analysis` reports changes
   vs baseline with reporting completeness for reliability assessment; it makes no causal claim and
   does not control for confounders (season, biomass, node set changes).
+- **No full-calendar storm fact.** Storm exposure is only exposed inside episode windows
+  (`fct_pen_storm_analysis.storm_minutes`); a small `fct_site_daily_storm` fact (site × date) was
+  proposed for full-calendar overlay and declined for now.
 - **Merged-interval storm exposure** if overlapping storms ever appear (cumulative event-minutes
   today, see assumption 3).
 - **Multi-site timezone lookup** — see `docs/limitations.md`.

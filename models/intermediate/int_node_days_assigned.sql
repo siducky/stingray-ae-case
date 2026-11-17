@@ -1,10 +1,9 @@
-{#-
-    One row per assigned node per calendar day in the reporting period.
-
-    The reporting window is deterministic and purely source-driven: the
-    observed min/max activity_date in the source data. There is no
-    CURRENT_DATE dependency and no override mechanism.
--#}
+-- Grain: one row per assigned node per calendar day.
+-- Reporting window: observed min/max activity_date (source-driven, no
+-- CURRENT_DATE). Each day is attributed to the assignment valid on that
+-- date - half-open [valid_from_date, valid_until_date) - not the current
+-- assignment. Days without telemetry keep null measures
+-- (has_activity_record = false): missing is NOT zero.
 
 with
 

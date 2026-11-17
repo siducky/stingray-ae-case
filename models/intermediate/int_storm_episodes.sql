@@ -1,27 +1,14 @@
-{#-
-    One row per storm episode per site.
-
-    Groups closely spaced storm events into analytical episodes. Events at
-    the same site merge when the next event starts strictly less than
-    var('storm_episode_gap_hours') (default 24) after the end of the
-    preceding episode; a gap of exactly 24 hours starts a new episode.
-    Events at different sites never merge.
-
-    Gaps-and-islands via a RUNNING MAXIMUM of preceding end timestamps
-    (not LAG), so overlapping and nested intervals are handled: an event
-    nested inside a previous event has a negative gap and merges.
-
-    CRITICAL: an episode is an analytical grouping. episode_started_at →
-    episode_ended_at is wall-clock time that includes quiet gaps between
-    member storms; those gaps are never storm exposure. Actual exposure
-    minutes live in int_storm_daily_exposure / int_site_daily_storm_summary
-    and must never be derived from the episode span.
-
-    Episode bounds are half-open [episode_started_at, episode_ended_at).
-    episode_end_date is the local date of the last exposed instant
-    (episode_ended_at minus one microsecond), so an episode ending exactly
-    at local midnight does not claim that day.
--#}
+-- Grain: one row per storm episode per site.
+-- Events merge when the next starts strictly less than
+-- var('storm_episode_gap_hours') (default 24) after the running-max end
+-- of preceding events at that site; a gap of exactly 24h starts a new
+-- episode; different sites never merge. The running max (not LAG) makes
+-- overlapping/nested intervals safe.
+-- The span is wall-clock and INCLUDES quiet gaps between member storms:
+-- never exposure (exposure lives in int_storm_daily_exposure).
+-- Bounds are half-open; episode_end_date is the last exposed local date
+-- (end - 1 microsecond), so an end exactly at local midnight claims no
+-- extra day.
 
 with
 

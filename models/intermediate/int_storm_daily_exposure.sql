@@ -1,12 +1,7 @@
-{#-
-    One row per storm event per local calendar date.
-
-    Storm timestamps are staged as naive UTC. Local calendar days come
-    from int_dates (var('site_timezone'), DST-aware: a 23-hour spring day
-    allows up to 1380 storm minutes, a 25-hour Oslo fall-back day up to
-    1500). All timestamp comparisons stay in naive-UTC space, so the
-    storm timestamps compare directly against the day boundaries.
--#}
+-- Grain: one row per storm event per local calendar date.
+-- Half-open [storm_started_at, storm_ended_at) UTC intervals clipped to
+-- the DST-aware day boundaries from int_dates (naive-UTC comparison).
+-- A day touched only at the exact end boundary gets no row.
 
 with
 
