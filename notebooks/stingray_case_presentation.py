@@ -714,19 +714,84 @@ def shape_metrics(analysis, baselines, daily, episodes, storm_days):
         lambda v: "left" if v >= 0 else "right"
     )
 
-    # Reporting completeness by pen and period.
-    completeness_rows = []
-    for row in s01.itertuples():
-        completeness_rows.append(
-            {
-                "pen_id": row.pen_id,
-                "Before": row.baseline_reporting_completeness,
-                "During": row.during_reporting_completeness,
-                "After": row.after_reporting_completeness,
-                "node_change": row.has_node_change_in_window,
-            }
+    # S01 per-pen, per-period metrics from the storm-window fact.
+    # Aggregated from totals; never an average of daily rates.
+    _s01_window = analysis[analysis["site_id"] == "S01"].copy()
+    _grouped = (
+        _s01_window.groupby(["pen_id", "storm_period"], sort=False)
+        .agg(
+            days=("activity_date", "count"),
+            reported_days=("has_reported_activity", "sum"),
+            positive_uptime_days=("uptime_minutes", lambda col: int((col > 0).sum())),
+            expected_node_minutes=("expected_node_minutes", "sum"),
+            uptime_minutes=("uptime_minutes", "sum"),
+            shots=("laser_shot_count", "sum"),
+            detections=("lice_detection_count", "sum"),
+            expected_node_days=("expected_node_days", "sum"),
+            reported_node_days=("reported_node_days", "sum"),
+            nodes=("node_ids", lambda col: " / ".join(sorted(set(col)))),
         )
-    completeness = pd.DataFrame(completeness_rows)
+        .reset_index()
+    )
+    _grouped["completeness"] = (
+        _grouped["reported_node_days"] / _grouped["expected_node_days"]
+    )
+    _grouped["uptime_pct"] = (
+        _grouped["uptime_minutes"] / _grouped["expected_node_minutes"] * 100
+    )
+    _grouped["det_hr"] = _grouped["detections"] / (_grouped["uptime_minutes"] / 60)
+    _grouped["shots_hr"] = _grouped["shots"] / (_grouped["uptime_minutes"] / 60)
+    _grouped["spd"] = _grouped["shots"] / _grouped["detections"]
+
+    _metric_cols = [
+        "days",
+        "reported_days",
+        "positive_uptime_days",
+        "completeness",
+        "uptime_pct",
+        "det_hr",
+        "shots_hr",
+        "spd",
+        "shots",
+        "detections",
+        "uptime_minutes",
+        "nodes",
+    ]
+    _wide = _grouped.pivot(index="pen_id", columns="storm_period", values=_metric_cols)
+    _wide.columns = [f"{metric}_{period}" for metric, period in _wide.columns]
+    s01_metrics = _wide.reset_index().sort_values("pen_id").reset_index(drop=True)
+
+    for period in ("during", "after"):
+        for metric in ("uptime_pct", "det_hr", "shots_hr", "spd"):
+            base = s01_metrics[f"{metric}_before"]
+            value = s01_metrics[f"{metric}_{period}"]
+            s01_metrics[f"{period}_change_{metric}_pct"] = (value - base) / base * 100
+
+    # Baseline day-to-day variability, used to qualify the pen comparisons.
+    _baseline_daily = _s01_window[_s01_window["storm_period"] == "before"].copy()
+    _baseline_daily["shots_hr"] = _baseline_daily["laser_shot_count"] / (
+        _baseline_daily["uptime_minutes"] / 60
+    )
+    _baseline_daily["det_hr"] = _baseline_daily["lice_detection_count"] / (
+        _baseline_daily["uptime_minutes"] / 60
+    )
+    _baseline_daily["spd"] = (
+        _baseline_daily["laser_shot_count"] / _baseline_daily["lice_detection_count"]
+    )
+    baseline_ranges = (
+        _baseline_daily.groupby("pen_id")
+        .agg(
+            shots_hr_min=("shots_hr", "min"),
+            shots_hr_max=("shots_hr", "max"),
+            det_hr_min=("det_hr", "min"),
+            det_hr_max=("det_hr", "max"),
+            spd_min=("spd", "min"),
+            spd_max=("spd", "max"),
+        )
+        .reset_index()
+        .sort_values("pen_id")
+        .reset_index(drop=True)
+    )
 
     # S02 is deliberately a separate, quieter story.
     s02_bands = episodes[episodes["site_id"] == "S02"][
@@ -800,23 +865,6 @@ def shape_metrics(analysis, baselines, daily, episodes, storm_days):
         )
         bucket[r["status"]] = bucket.get(r["status"], 0) + 1
 
-    # Compact strings used in several places.
-    s01_summary = {
-        row.pen_id: {
-            "during_pct": float(row.during_change_vs_baseline_pct),
-            "after_pct": float(row.after_change_vs_baseline_pct),
-            "baseline": float(row.baseline_shots_per_operating_hour),
-            "during": float(row.during_shots_per_operating_hour),
-            "after": float(row.after_shots_per_operating_hour),
-            "shots_pct": (row.during_shots - row.baseline_shots)
-            / row.baseline_shots
-            * 100,
-            "uptime_pct": (row.during_uptime_minutes - row.baseline_uptime_minutes)
-            / row.baseline_uptime_minutes
-            * 100,
-        }
-        for row in s01.itertuples()
-    }
     s02_summary = [
         {
             "pen_id": row.pen_id,
@@ -833,7 +881,8 @@ def shape_metrics(analysis, baselines, daily, episodes, storm_days):
         totals,
         s01_long,
         delta_metrics,
-        completeness,
+        s01_metrics,
+        baseline_ranges,
         s02_bands,
         p201_daily,
         timeline,
@@ -841,7 +890,6 @@ def shape_metrics(analysis, baselines, daily, episodes, storm_days):
         test_counts,
         analysis_totals,
         relationship_counts,
-        s01_summary,
         s02_summary,
     )
 
@@ -857,7 +905,7 @@ def build_figures(episodes, s01_long, delta_metrics, p201_daily, s02_bands, time
         )
         _panel_frame = _panel_frame.sort_values("period")
         show_axis = _panel_index == 0
-        base = alt.Chart(_panel_frame).encode(
+        _panel_base = alt.Chart(_panel_frame).encode(
             x=alt.X(
                 "period:N",
                 sort=PERIOD_ORDER,
@@ -880,8 +928,8 @@ def build_figures(episodes, s01_long, delta_metrics, p201_daily, s02_bands, time
                 ),
             ),
         )
-        line = base.mark_line(color="#B7C7D1", strokeWidth=1.8)
-        points = base.mark_circle(size=120, filled=True).encode(
+        line = _panel_base.mark_line(color="#B7C7D1", strokeWidth=1.8)
+        points = _panel_base.mark_circle(size=120, filled=True).encode(
             color=alt.Color(
                 "period:N",
                 scale=alt.Scale(
@@ -895,7 +943,7 @@ def build_figures(episodes, s01_long, delta_metrics, p201_daily, s02_bands, time
                 legend=None,
             )
         )
-        values = base.mark_text(
+        values = _panel_base.mark_text(
             dy=-15, fontSize=10.5, fontWeight=600, color=INK
         ).encode(text=alt.Text("rate_label:N"))
         deltas = (
@@ -1177,8 +1225,9 @@ def build_figures(episodes, s01_long, delta_metrics, p201_daily, s02_bands, time
 
 @app.cell
 def slide_title(episodes, totals):
-    # KEY MESSAGE  A stakeholder question, a tested pipeline, an honest scope.
-    # SAY          Title question -> investigation scope -> data/model/decision roles.
+    # KEY MESSAGE  A stakeholder question, a tested pipeline, an honest scope, and the
+    #              observed direction of the answer stated up front.
+    # SAY          Title question -> early observed association -> scope -> pipeline roles.
     # TRANSITION   "Let me start with what the farmers actually report."
     sonar = f"""
     <svg viewBox="0 0 540 430" width="100%" height="100%" preserveAspectRatio="xMidYMid meet"
@@ -1212,19 +1261,6 @@ def slide_title(episodes, totals):
         <circle cx="355" cy="278" r="3.2" opacity="0.75"/>
         <circle cx="159" cy="205" r="2.6" opacity="0.55"/>
         <circle cx="431" cy="232" r="2.6" opacity="0.55"/>
-      </g>
-      <g fill="{SEAFOAM}" opacity="0.65" font-family="{SANS}" font-size="9" letter-spacing=".08em">
-        <text x="352" y="119">S01</text>
-        <text x="228" y="250">S02</text>
-      </g>
-      <path d="M 58 344 C 118 324, 166 360, 226 342 S 342 322, 402 342 S 486 356, 530 336"
-            fill="none" stroke="{TEAL_SOFT}" stroke-width="1.2" opacity="0.28"/>
-      <path d="M 58 362 C 126 346, 174 376, 238 358 S 350 340, 414 360 S 492 370, 530 354"
-            fill="none" stroke="{TEAL_SOFT}" stroke-width="1" opacity="0.18"/>
-      <path d="M 58 380 C 118 366, 182 392, 244 376 S 354 358, 418 378 S 494 386, 530 372"
-            fill="none" stroke="{TEAL_SOFT}" stroke-width="1" opacity="0.11"/>
-      <g fill="{SEAFOAM}" opacity="0.35" font-family="{MONO}" font-size="8">
-        <text x="60" y="408">0</text><text x="250" y="408">250</text><text x="440" y="408">500 m</text>
       </g>
     </svg>
     """
@@ -1261,8 +1297,11 @@ def slide_title(episodes, totals):
         f'letter-spacing:-.025em;max-width:700px;">When storms hit, do the '
         f'<span style="color:#7FE0DA;">lasers slow down</span>?</div>'
         f'<div style="font-size:18px;font-weight:650;line-height:1.45;color:#B9D6D2;'
-        f'margin-top:16px;max-width:620px;">Making sense of node activity in '
-        f"rough weather</div>"
+        f'margin-top:16px;max-width:620px;">Storm periods coincided with lower '
+        f"equipment uptime and fewer detections while nodes were operating — "
+        f"shots per detection stayed broadly stable.</div>"
+        f'<div style="font-size:10px;color:#6F8F96;margin-top:10px;">'
+        f"Observed association, not a causal claim.</div>"
         f'<div style="margin-top:30px;">'
         f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.16em;'
         f'text-transform:uppercase;color:#6F8F96;margin-bottom:8px;">'
@@ -1351,7 +1390,7 @@ def slide_problem():
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;box-sizing:border-box;'
         f'padding:8px 6px 10px 6px;">'
-        f"{header('01 / The business problem', 'A decline in laser shots', 'Farmers report less laser activity after storms. Help the Fish Health team debug if this true.')}"
+        f"{header('01 / The business problem', 'A decline in laser shots', 'Farmers report less laser activity after storms. Help the Fish Health team determine whether this is true.')}"
         f'<div style="display:grid;grid-template-columns:1.24fr .76fr;gap:54px;'
         f'align-items:start;margin-top:8px;">'
         f'<div style="padding:8px 0 0 20px;border-left:4px solid {CORAL};">'
@@ -1360,7 +1399,7 @@ def slide_problem():
         f'<div style="font-size:24px;line-height:1.35;color:{NAVY};font-weight:600;'
         f'letter-spacing:-.01em;max-width:740px;margin-top:8px;">'
         f"Farmers report lower laser activity after storms. The key question is "
-        f'whether storms affect <span style="color:{CORAL_DEEP};">equipment, availability laser activity</span> '
+        f'whether storms affect <span style="color:{CORAL_DEEP};">equipment availability, laser activity</span> '
         f"or both.</div>"
         f'<div style="font-size:11.5px;color:{MUTED};margin-top:12px;">'
         f"Kari Nordmann · Fish Health Biologist</div>"
@@ -1697,7 +1736,7 @@ def slide_quality(fish_logs, missing_telemetry, test_counts, zero_uptime):
 def slide_method(daily):
     # KEY MESSAGE  Four metrics separate availability, detection, firing and firing-per-detection.
     # SAY          Walk the four cards, then the interpretation strip.
-    # TRANSITION   "Now the dimensional model that carries these metrics."
+    # TRANSITION   "Now the engineering design that carries these metrics."
 
     reported = int(daily["reported_node_days"].sum())
     expected = int(daily["expected_node_days"].sum())
@@ -1774,19 +1813,19 @@ def slide_method(daily):
             f'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
             f'<span style="font-family:{MONO};font-size:10px;font-weight:700;'
             f'color:{item["colour"]};">{item["num"]}</span>'
-            f'<span style="font-size:8px;font-weight:700;letter-spacing:.08em;'
+            f'<span style="font-size:10px;font-weight:700;letter-spacing:.08em;'
             f'text-transform:uppercase;color:{MUTED};">{item["tag"]}</span></div>'
             f'<div style="font-size:13.5px;font-weight:700;color:{NAVY};line-height:1.25;'
             f'margin-top:8px;">{item["name"]}</div>'
-            f'<div style="font-family:{MONO};font-size:10.2px;font-weight:650;'
+            f'<div style="font-family:{MONO};font-size:11.0px;font-weight:650;'
             f'color:{item["colour"]};margin-top:3px;">{item["metric"]}</div>'
             f'<div style="background:{item["tint"]};border-radius:6px;'
-            f"padding:8px 9px;margin-top:11px;font-family:{MONO};font-size:9.2px;"
+            f"padding:8px 9px;margin-top:11px;font-family:{MONO};font-size:10.0px;"
             f'line-height:1.5;color:{OCEAN};">{formula_html}</div>'
-            f'<div style="font-size:11.5px;line-height:1.45;color:{INK};margin-top:11px;">'
+            f'<div style="font-size:12.2px;line-height:1.45;color:{INK};margin-top:11px;">'
             f"{item['question']}</div>"
             f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-            f'font-size:9.6px;line-height:1.4;color:{MUTED};">'
+            f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
             f'<b style="color:{CORAL_DEEP};">{item["if_line"].split(":")[0]}:</b>'
             f"{item['if_line'].split(':', 1)[1]}</div></div>"
         )
@@ -1802,6 +1841,7 @@ def slide_method(daily):
         f'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
         f"{chip('Ratios of totals — never averages', fg=OCEAN, bg=MIST)}"
         f"{chip('Missing or zero denominator → NULL', fg=CORAL_DEEP, bg=CORAL_SOFT)}"
+        f"{chip('shots/hour = detections/hour × shots/detection', fg=NAVY, bg=MIST)}"
         f"{chip(f'Reporting completeness {reported} / {expected} ({_completeness:.1%})', fg=TEAL_DEEP, bg=SEAFOAM)}"
         f"</div>"
         f'<div style="font-size:10px;line-height:1.4;color:{CORAL_DEEP};'
@@ -1813,10 +1853,10 @@ def slide_method(daily):
 
 
 @app.cell
-def slide_architecture(test_counts):
-    # KEY MESSAGE  Clear boundaries, explicit grain and tested logic make the models reliable.
-    # SAY          Walk the pipeline, then the two grains, then the tests.
-    # TRANSITION   "Now the dimensional model that exposes those two grains."
+def slide_architecture(analysis, mart_counts, test_counts):
+    # KEY MESSAGE  Layered dbt models, two explicit fact grains and tested logic.
+    # SAY          Pipeline -> two facts and shared dimensions -> tests.
+    # TRANSITION   "Next, the lineage that connects these layers end to end."
     _manifest = json.loads(Path("target/manifest.json").read_text(encoding="utf-8"))
     _layers = [
         node["fqn"][1]
@@ -1829,6 +1869,14 @@ def slide_architecture(test_counts):
     _total = len(_layers)
     _tests = test_counts["tests"]
     _unit = sum(test_counts["by_layer"].get("unit", {}).values())
+    _mart_counts = dict(
+        zip(mart_counts["model_name"], mart_counts["row_count"], strict=True)
+    )
+    _daily_rows = _mart_counts["fct_pen_daily_activity"]
+    _storm_rows = _mart_counts["fct_pen_storm_window_day"]
+    _unique_pen_days = int(
+        analysis[["pen_id", "activity_date"]].drop_duplicates().shape[0]
+    )
 
     layers = [
         ("RAW", "4", "CSV files", "#F4F7F9", "#B7C7D1", INK),
@@ -1855,10 +1903,10 @@ def slide_architecture(test_counts):
         rail_html += (
             f'<div style="flex:1;min-width:0;background:{_fill};border:1px solid {_stroke};'
             f'border-radius:8px;padding:8px 11px;">'
-            f'<div style="font-size:7.5px;font-weight:700;letter-spacing:.12em;'
+            f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.12em;'
             f'text-transform:uppercase;color:{_colour};opacity:.9;">{_tag}</div>'
             f"{count_html}"
-            f'<div style="font-size:9px;color:{_colour};opacity:.9;margin-top:2px;">'
+            f'<div style="font-size:10px;color:{_colour};opacity:.9;margin-top:2px;">'
             f"{_label}</div></div>"
         )
         if _index < len(layers) - 1:
@@ -1884,7 +1932,7 @@ def slide_architecture(test_counts):
         f'<div style="display:flex;gap:8px;align-items:flex-start;margin-top:9px;">'
         f'<span style="flex:0 0 6px;height:6px;margin-top:5px;border-radius:50%;'
         f'background:{_colour};"></span>'
-        f'<div style="font-size:10.5px;line-height:1.45;color:{INK};">'
+        f'<div style="font-size:11.2px;line-height:1.45;color:{INK};">'
         f"<b>{_name}.</b> {_body}</div></div>"
         for _name, _body, _colour in boundaries
     )
@@ -1904,7 +1952,7 @@ def slide_architecture(test_counts):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('05 / Engineering architecture', 'From raw data to reliable analytical models', 'Clear model boundaries, explicit analytical grain and tested business logic make the results reliable and reusable.')}"
+        f"{header('05 / Engineering design', 'Layered dbt models, two fact grains, shared dimensions', 'Clear model boundaries, two explicit analytical grains and tested business logic make the results reliable and reusable.')}"
         f'<div style="display:flex;align-items:stretch;gap:5px;margin-top:2px;">'
         f"{rail_html}</div>"
         f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;'
@@ -1913,45 +1961,62 @@ def slide_architecture(test_counts):
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
         f"border-top:4px solid {TEAL};border-radius:9px;padding:13px 15px 11px 15px;"
         f'display:flex;flex-direction:column;box-sizing:border-box;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
+        f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{TEAL_DEEP};">01</div>'
         f'<div style="font-size:14.5px;font-weight:700;color:{NAVY};line-height:1.3;'
         f'margin-top:3px;">Clear model boundaries</div>'
         f'<div style="margin-top:3px;">{boundary_rows}</div>'
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-        f'font-size:9.6px;line-height:1.4;color:{MUTED};">'
+        f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
         f"Each layer has one job; logic does not leak into reports.</div></div>"
-        # 2 - grain
+        # 2 - two facts and shared dimensions
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
         f"border-top:4px solid {OCEAN};border-radius:9px;padding:13px 15px 11px 15px;"
         f'display:flex;flex-direction:column;box-sizing:border-box;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
+        f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{OCEAN};">02</div>'
         f'<div style="font-size:14.5px;font-weight:700;color:{NAVY};line-height:1.3;'
-        f'margin-top:3px;">Explicit analytical grain</div>'
+        f'margin-top:3px;">Two facts, two questions</div>'
         f'<div style="margin-top:9px;">'
-        f'<div style="font-size:9px;font-weight:700;letter-spacing:.08em;'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.08em;'
         f'text-transform:uppercase;color:{TEAL_DEEP};">Daily activity fact</div>'
-        f'<div style="font-size:10.5px;line-height:1.45;color:{INK};margin-top:2px;">'
-        f"One row per site × pen × date. The additive operational source of truth."
-        f"</div></div>"
+        f'<div style="font-size:11.2px;line-height:1.45;color:{INK};margin-top:2px;">'
+        f"One row per site × pen × date · {_daily_rows} rows. The additive source of "
+        f"truth for overall totals.</div></div>"
         f'<div style="margin-top:10px;">'
-        f'<div style="font-size:9px;font-weight:700;letter-spacing:.08em;'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.08em;'
         f'text-transform:uppercase;color:{CORAL_DEEP};">Storm-window fact</div>'
-        f'<div style="font-size:10.5px;line-height:1.45;color:{INK};margin-top:2px;">'
-        f"One row per pen × storm episode × date. For before/during/after comparisons."
+        f'<div style="font-size:11.2px;line-height:1.45;color:{INK};margin-top:2px;">'
+        f"One row per pen × storm episode × date · {_storm_rows} rows / "
+        f"{_unique_pen_days} unique pen-days. For before/during/after comparisons."
         f"</div></div>"
-        f'<div style="font-size:10.2px;line-height:1.45;color:{MUTED};margin-top:11px;">'
-        f"Two facts because they answer different questions. Separate grains prevent "
-        f"misleading totals and double counting.</div>"
+        f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:11px;">'
+        + "".join(
+            f'<span style="font-family:{MONO};font-size:9.2px;font-weight:600;'
+            f"color:{TEAL_DEEP};background:{SEAFOAM};border-radius:4px;"
+            f'padding:2px 6px;white-space:nowrap;">{dim}'
+            f'<span style="font-family:{SANS};font-weight:500;color:{MUTED};">'
+            f" · both facts</span></span>"
+            for dim in ["dim_date", "dim_site", "dim_pen"]
+        )
+        + f'<span style="font-family:{MONO};font-size:9.2px;color:{CORAL_DEEP};'
+        f"background:{CORAL_SOFT};border-radius:4px;padding:2px 6px;"
+        f'white-space:nowrap;">dim_storm_episode'
+        f'<span style="font-family:{SANS};color:{MUTED};"> · window fact only</span></span>'
+        + "</div>"
+        f'<div style="font-size:11.0px;line-height:1.45;color:{MUTED};margin-top:8px;">'
+        f"Shared dimensions keep filters consistent; the facts are never joined "
+        f"directly. Storm exposure is site-level and repeated per pen — never "
+        f"allocated to individual pens.</div>"
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-        f'font-size:9.6px;line-height:1.4;color:{MUTED};">'
-        f"Overall totals come from the daily fact.</div></div>"
+        f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
+        f"Overall totals come from the daily fact; event comparisons from the "
+        f"window fact.</div></div>"
         # 3 - tests
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
         f"border-top:4px solid {CORAL};border-radius:9px;padding:13px 15px 11px 15px;"
         f'display:flex;flex-direction:column;box-sizing:border-box;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
+        f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{CORAL_DEEP};">03</div>'
         f'<div style="font-size:14.5px;font-weight:700;color:{NAVY};line-height:1.3;'
         f'margin-top:3px;">Tested business logic</div>'
@@ -1959,156 +2024,22 @@ def slide_architecture(test_counts):
         f'<span style="font-family:{MONO};font-size:30px;font-weight:700;'
         f'line-height:1;color:{NAVY};">{_tests}</span>'
         f'<span style="font-size:10px;color:{MUTED};">tests on every build</span>'
-        f'<span style="font-size:8px;font-weight:650;color:{CORAL_DEEP};'
+        f'<span style="font-size:9px;font-weight:650;color:{CORAL_DEEP};'
         f'background:{CORAL_SOFT};border-radius:999px;padding:2px 7px;">'
         f"{_unit} unit tests</span></div>"
-        f'<div style="font-size:10.5px;line-height:1.45;color:{INK};margin-top:9px;">'
+        f'<div style="font-size:11.2px;line-height:1.45;color:{INK};margin-top:9px;">'
         f"Rules live in dbt and are checked by tests, including edge cases:</div>"
         f"{example_rows}"
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-        f'font-size:9.6px;line-height:1.4;color:{MUTED};">'
+        f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
         f"The SQL is the implementation; the tests are the guarantee.</div></div></div>"
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
         f"display:flex;justify-content:space-between;align-items:center;"
-        f'font-size:9.2px;color:{MUTED};">'
+        f'font-size:10.0px;color:{MUTED};">'
         f"<span>{_total} models · {_staging} staging · {_intermediate} intermediate · "
-        f"{_marts} marts · built and tested on DuckDB · Snowflake intended production</span>"
-        f'<span style="font-family:{MONO};font-size:8.5px;">'
-        f"docs/production_portability.md</span></div>"
-        f"</div>"
-    )
-
-
-@app.cell
-def slide_model(analysis, mart_counts):
-    # KEY MESSAGE  Two facts because there are two questions: pen performance over time,
-    #              and activity around each storm episode.
-    # SAY          Explain the daily fact, the window fact, then the shared dimensions
-    #              and the non-additivity warning.
-    # TRANSITION   "A few lines of SQL show where the correctness lives."
-    _mart_counts = dict(
-        zip(mart_counts["model_name"], mart_counts["row_count"], strict=True)
-    )
-    _daily_rows = _mart_counts["fct_pen_daily_activity"]
-    _storm_rows = _mart_counts["fct_pen_storm_window_day"]
-    _unique_pen_days = int(
-        analysis[["pen_id", "activity_date"]].drop_duplicates().shape[0]
-    )
-
-    facts = [
-        {
-            "tag": "Daily activity fact",
-            "name": "fct_pen_daily_activity",
-            "grain": "One row per site, pen and day.",
-            "count": f"{_daily_rows} rows",
-            "label": "What it measures",
-            "body": (
-                "Shots, lice detections, operating time, reporting completeness "
-                "and fish-count context."
-            ),
-            "answers": "How each pen performs over time.",
-            "footer": "This is the additive operational source of truth.",
-            "colour": TEAL,
-            "tint": SEAFOAM,
-        },
-        {
-            "tag": "Storm-window fact",
-            "name": "fct_pen_storm_window_day",
-            "grain": "One row per pen, storm episode and day.",
-            "count": f"{_storm_rows} rows · {_unique_pen_days} unique pen-days",
-            "label": "What it provides",
-            "body": (
-                "Before / during / after classification, activity metrics, "
-                "storm exposure and completeness."
-            ),
-            "answers": "How activity compares around individual storm events.",
-            "footer": "Not additive across episodes.",
-            "colour": CORAL,
-            "tint": CORAL_SOFT,
-        },
-    ]
-    fact_html = "".join(
-        f'<div style="background:{WHITE};border:1px solid {BORDER};'
-        f"border-top:4px solid {fact['colour']};border-radius:9px;"
-        f"padding:15px 17px 13px 17px;display:flex;flex-direction:column;"
-        f'min-height:258px;box-sizing:border-box;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-        f'gap:10px;flex-wrap:wrap;">'
-        f'<span style="font-size:9px;font-weight:700;letter-spacing:.12em;'
-        f'text-transform:uppercase;color:{fact["colour"]};">{fact["tag"]}</span>'
-        f'<span style="font-family:{MONO};font-size:9.5px;color:{MUTED};">'
-        f"{fact['name']}</span></div>"
-        f'<div style="font-size:16.5px;font-weight:700;color:{NAVY};line-height:1.3;'
-        f'margin-top:9px;">{fact["grain"]}</div>'
-        f'<div style="align-self:flex-start;background:{fact["tint"]};'
-        f"border-radius:999px;padding:2px 9px;font-size:9.5px;font-weight:650;"
-        f'color:{fact["colour"]};margin-top:8px;">{fact["count"]}</div>'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.1em;'
-        f'text-transform:uppercase;color:{MUTED};margin-top:13px;">{fact["label"]}</div>'
-        f'<div style="font-size:11.5px;line-height:1.45;color:{INK};margin-top:3px;">'
-        f"{fact['body']}</div>"
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.1em;'
-        f'text-transform:uppercase;color:{MUTED};margin-top:10px;">What it answers</div>'
-        f'<div style="font-size:11.5px;line-height:1.45;color:{INK};margin-top:3px;">'
-        f"{fact['answers']}</div>"
-        f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-        f'font-size:10.5px;font-weight:650;color:{fact["colour"]};">'
-        f"{fact['footer']}</div></div>"
-        for fact in facts
-    )
-
-    dimensions = [
-        ("Date", "dim_date", "Joins both facts", TEAL),
-        ("Site", "dim_site", "Joins both facts", TEAL),
-        ("Pen", "dim_pen", "Joins both facts", TEAL),
-        (
-            "Storm episode",
-            "dim_storm_episode",
-            "Joins the storm-window fact only",
-            CORAL,
-        ),
-    ]
-    dim_html = "".join(
-        f'<div style="background:{WHITE};border:1px solid {BORDER};'
-        f'border-top:3px solid {colour};border-radius:7px;padding:8px 11px;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-        f'gap:8px;flex-wrap:wrap;">'
-        f'<span style="font-size:11px;font-weight:700;color:{NAVY};">{name}</span>'
-        f'<span style="font-family:{MONO};font-size:8.5px;color:{MUTED};">{model}</span>'
-        f"</div>"
-        f'<div style="font-size:8.2px;font-weight:700;letter-spacing:.06em;'
-        f'text-transform:uppercase;color:{colour};margin-top:5px;">{relationship}</div>'
-        f"</div>"
-        for name, model, relationship, colour in dimensions
-    )
-
-    mo.Html(
-        f'<div style="min-height:650px;display:flex;flex-direction:column;'
-        f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('06 / Dimensional model', 'Two fact tables, two different analytical questions.', 'One provides the daily operational picture. The other makes it possible to compare activity around individual storm events.')}"
-        f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;'
-        f'margin-top:4px;">{fact_html}</div>'
-        f'<div style="margin-top:12px;background:#FFF4F1;border-left:3px solid {CORAL};'
-        f"border-radius:0 8px 8px 0;padding:9px 14px;font-size:11.8px;line-height:1.5;"
-        f'color:{INK};">'
-        f'<b style="color:{CORAL_DEEP};">Before aggregating:</b> The storm-window fact '
-        f"can contain the same pen-day in more than one episode. Use the daily activity "
-        f"fact for overall totals; do not simply sum the storm-window fact across "
-        f"episodes.</div>"
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-        f'margin-top:14px;">'
-        f'<div style="font-size:9px;font-weight:700;letter-spacing:.13em;'
-        f'text-transform:uppercase;color:{MUTED};">Dimensions</div>'
-        f'<div style="font-size:9.5px;color:{MUTED};">'
-        f"The two facts are never joined to each other.</div></div>"
-        f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px;'
-        f'margin-top:6px;">{dim_html}</div>'
-        f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-        f"display:flex;justify-content:space-between;align-items:center;"
-        f'font-size:9.2px;color:{MUTED};">'
-        f"<span>Built and tested locally on DuckDB — the same dbt marts layer lands in "
-        f'<b style="color:{INK};">Snowflake (RAW.STINGRAY)</b> in production.</span>'
-        f'<span style="font-family:{MONO};font-size:8.5px;">'
+        f"{_marts} marts · built and tested on DuckDB · the same marts land in "
+        f'<b style="color:{INK};">Snowflake (ANALYTICS.MARTS)</b> in production</span>'
+        f'<span style="font-family:{MONO};font-size:9.5px;">'
         f"docs/production_portability.md</span></div>"
         f"</div>"
     )
@@ -2125,11 +2056,11 @@ def slide_lineage():
     _source_rows = "".join(
         f'<div style="display:grid;grid-template-columns:112px 14px 1fr;gap:4px;'
         f'align-items:center;padding:6px 0;border-bottom:1px solid {BORDER};">'
-        f'<div><div style="font-family:{MONO};font-size:7.9px;color:#0D47A1;'
+        f'<div><div style="font-family:{MONO};font-size:9.0px;color:#0D47A1;'
         f'overflow-wrap:anywhere;">{src}</div>'
-        f'<div style="font-size:6.6px;color:{MUTED};margin-top:1px;">{grain}</div></div>'
-        f'<span style="font-size:11.5px;color:{TEAL};">→</span>'
-        f'<span style="font-family:{MONO};font-size:7.9px;color:#0D47A1;'
+        f'<div style="font-size:9.0px;color:{MUTED};margin-top:1px;">{grain}</div></div>'
+        f'<span style="font-size:12px;color:{TEAL};">→</span>'
+        f'<span style="font-family:{MONO};font-size:9.0px;color:#0D47A1;'
         f'overflow-wrap:anywhere;">{stg}</span></div>'
         for src, grain, stg in [
             (
@@ -2153,12 +2084,12 @@ def slide_lineage():
 
     def _model_row(name: str, desc: str, *, colour: str = CORAL_DEEP) -> str:
         return (
-            f'<div style="display:flex;align-items:baseline;gap:6px;padding:6px 9px;'
-            f"margin-top:5px;background:{WHITE};border:1px solid {BORDER};"
+            f'<div style="display:flex;align-items:baseline;gap:6px;padding:4px 8px;'
+            f"margin-top:4px;background:{WHITE};border:1px solid {BORDER};"
             f'border-left:2px solid {colour};border-radius:4px;">'
-            f'<span style="font-family:{MONO};font-size:8.0px;font-weight:650;'
+            f'<span style="font-family:{MONO};font-size:9.8px;font-weight:650;'
             f'color:{colour};white-space:nowrap;">{name}</span>'
-            f'<span style="font-size:7.7px;line-height:1.3;color:{MUTED};">'
+            f'<span style="font-size:9.4px;line-height:1.3;color:{MUTED};">'
             f"{desc}</span></div>"
         )
 
@@ -2203,8 +2134,8 @@ def slide_lineage():
         ),
     ]
     _group_html = "".join(
-        f'<div style="font-size:7.3px;font-weight:700;letter-spacing:.11em;'
-        f'text-transform:uppercase;color:{MUTED};margin:9px 0 0 2px;">{title}</div>'
+        f'<div style="font-size:9.0px;font-weight:700;letter-spacing:.11em;'
+        f'text-transform:uppercase;color:{MUTED};margin:6px 0 0 2px;">{title}</div>'
         + "".join(_model_row(name, desc) for name, desc in rows)
         for title, rows in _groups
     )
@@ -2220,23 +2151,23 @@ def slide_lineage():
         tint: str,
     ) -> str:
         _feeders = "".join(
-            f'<span style="font-family:{MONO};font-size:7.0px;color:{colour};'
+            f'<span style="font-family:{MONO};font-size:8.2px;color:{colour};'
             f"background:{tint};border-radius:3px;padding:1px 4px;"
             f'white-space:nowrap;">{feeder}</span>'
             for feeder in feeders
         )
         return (
             f'<div style="background:{WHITE};border:1px solid {BORDER};'
-            f'border-top:3px solid {colour};border-radius:7px;padding:11px 13px;margin-bottom:9px;">'
-            f'<div style="font-size:6.5px;font-weight:700;letter-spacing:.12em;'
+            f'border-top:3px solid {colour};border-radius:7px;padding:9px 11px;margin-bottom:7px;">'
+            f'<div style="font-size:9.0px;font-weight:700;letter-spacing:.12em;'
             f'text-transform:uppercase;color:{colour};">{path_label}</div>'
-            f'<div style="font-family:{MONO};font-size:9.2px;font-weight:700;'
+            f'<div style="font-family:{MONO};font-size:10.8px;font-weight:700;'
             f'color:{colour};margin-top:2px;">{name}</div>'
-            f'<div style="font-size:8.6px;font-weight:650;color:{NAVY};'
+            f'<div style="font-size:10.0px;font-weight:650;color:{NAVY};'
             f'margin-top:2px;">{grain}</div>'
-            f'<div style="font-size:7.9px;line-height:1.4;color:{MUTED};'
+            f'<div style="font-size:9.2px;line-height:1.4;color:{MUTED};'
             f'margin-top:2px;">{desc}</div>'
-            f'<div style="font-size:6.9px;font-weight:700;letter-spacing:.1em;'
+            f'<div style="font-size:8.3px;font-weight:700;letter-spacing:.1em;'
             f'text-transform:uppercase;color:{MUTED};margin-top:6px;">Fed by</div>'
             f'<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:3px;">'
             f"{_feeders}</div></div>"
@@ -2266,14 +2197,14 @@ def slide_lineage():
 
     _dim_cards = "".join(
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
-        f'border-left:3px solid {colour};border-radius:6px;padding:8px 10px;">'
+        f'border-left:3px solid {colour};border-radius:6px;padding:7px 9px;">'
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
         f'gap:5px;">'
-        f'<span style="font-family:{MONO};font-size:8.6px;font-weight:700;'
+        f'<span style="font-family:{MONO};font-size:10.0px;font-weight:700;'
         f'color:{colour};">{name}</span>'
-        f'<span style="font-size:6.8px;font-weight:700;letter-spacing:.07em;'
+        f'<span style="font-size:8.2px;font-weight:700;letter-spacing:.07em;'
         f'text-transform:uppercase;color:{relation_colour};">{relation}</span></div>'
-        f'<div style="font-family:{MONO};font-size:7.2px;color:{MUTED};'
+        f'<div style="font-family:{MONO};font-size:8.6px;color:{MUTED};'
         f'margin-top:3px;overflow-wrap:anywhere;">← {source}</div></div>'
         for name, source, relation, colour, relation_colour in [
             ("dim_date", "int_dates", "both facts", TEAL_DEEP, TEAL_DEEP),
@@ -2305,9 +2236,9 @@ def slide_lineage():
         return (
             f'<div style="padding-bottom:7px;border-bottom:2px solid {colour};'
             f'margin-bottom:7px;">'
-            f'<div style="font-size:8.6px;font-weight:700;letter-spacing:.12em;'
+            f'<div style="font-size:10.2px;font-weight:700;letter-spacing:.12em;'
             f'text-transform:uppercase;color:{colour};">{label}</div>'
-            f'<div style="font-size:7.4px;color:{MUTED};margin-top:2px;">{sub}</div>'
+            f'<div style="font-size:8.8px;color:{MUTED};margin-top:2px;">{sub}</div>'
             f"</div>"
         )
 
@@ -2319,7 +2250,7 @@ def slide_lineage():
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('07 / Traceability', 'Data lineage', 'From source data to analytical outputs — follows the medallion architecture: staging, intermediate and marts.', title_size=36, lead_size=15.5)}"
+        f"{header('06 / Traceability', 'Data lineage', 'From source data to analytical outputs — through the layered dbt architecture: staging, intermediate and marts.', title_size=36, lead_size=15.5)}"
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:9px;'
         f'padding:13px 15px;box-sizing:border-box;">'
         f'<div style="display:grid;grid-template-columns:298px 24px minmax(0,1fr) 24px 358px;'
@@ -2327,10 +2258,10 @@ def slide_lineage():
         f'<div style="display:flex;flex-direction:column;height:100%;">'
         f"{_section_head('Sources → staging', 'Source grain preserved · rename, cast, timestamps', '#0D47A1')}"
         f"{_source_rows}"
-        f'<div style="font-size:7.4px;line-height:1.4;color:{MUTED};margin-top:7px;">'
+        f'<div style="font-size:8.8px;line-height:1.4;color:{MUTED};margin-top:7px;">'
         f"Four views, 1:1 with the extracts. No business logic yet.</div>"
         f'<div style="margin-top:auto;padding:9px 11px;background:#EAF4FD;'
-        f"border-left:3px solid #8CC3EA;border-radius:0 6px 6px 0;font-size:7.4px;"
+        f"border-left:3px solid #8CC3EA;border-radius:0 6px 6px 0;font-size:8.8px;"
         f'line-height:1.45;color:{INK};">'
         f"<b>Staging contract</b><br>Rename, cast, parse and normalise timestamps. "
         f"Keep the source grain; no joins, aggregation or business rules.</div></div>"
@@ -2343,7 +2274,7 @@ def slide_lineage():
         f"{_section_head('Reporting marts', 'Two facts · four dimensions', '#1B5E20')}"
         f"{_facts_html}"
         f'<div style="margin-top:auto;padding:9px 11px;background:{MIST};'
-        f'border-radius:6px;font-size:7.6px;line-height:1.45;color:{INK};">'
+        f'border-radius:6px;font-size:9.0px;line-height:1.45;color:{INK};">'
         f"<b>No fact-to-fact join.</b> The daily fact owns overall totals; the "
         f"storm-window fact owns event comparisons. Storm exposure is site-level, "
         f"repeated across pens — never sum it across pens.</div>"
@@ -2353,7 +2284,7 @@ def slide_lineage():
         f'margin:0 2px 4px 2px;">'
         f'<span style="font-size:8.6px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{MUTED};">Dimensions</span>'
-        f'<span style="font-size:7.6px;color:{MUTED};">'
+        f'<span style="font-size:9.0px;color:{MUTED};">'
         f"dim_date · dim_site · dim_pen filter both facts; dim_storm_episode filters "
         f"the storm-window fact only.</span></div>"
         f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;">'
@@ -2361,7 +2292,7 @@ def slide_lineage():
         f'<div style="margin-top:12px;padding:10px 40px 0 0;'
         f"border-top:1px solid {BORDER};"
         f"display:flex;justify-content:space-between;align-items:center;gap:12px;"
-        f'font-size:8.5px;color:{MUTED};">'
+        f'font-size:9.8px;color:{MUTED};">'
         f'<span><b style="color:{INK};">dbt traceability:</b> every arrow is a '
         f'<span style="font-family:{MONO};">ref()</span> edge — the manifest '
         f'<span style="font-family:{MONO};">parent_map</span> and DAG resolve the '
@@ -2372,14 +2303,16 @@ def slide_lineage():
 
 
 @app.cell
-def slide_findings(completeness, s01, s01_summary, s02_summary):
-    # KEY MESSAGE  S01's high-severity storm coincided with lower firing rates in all
-    #              three pens - but the underlying changes were different.
-    # SAY          Lead with the rate falls, then the mechanism, then the limits.
+def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
+    # KEY MESSAGE  Storm periods coincided with lower uptime and fewer detections
+    #              while nodes were operating; shots per detection stayed broadly stable.
+    # SAY          Availability -> detection and firing while operating -> after the storm.
     # TRANSITION   "How would Kari use this without me in the room?"
-    p101 = s01_summary["P101"]
-    p102 = s01_summary["P102"]
-    p103 = s01_summary["P103"]
+    pens = ["P101", "P102", "P103"]
+    _pen_rows = {pen: s01_metrics[s01_metrics["pen_id"] == pen].iloc[0] for pen in pens}
+    _pen_base = {
+        pen: baseline_ranges[baseline_ranges["pen_id"] == pen].iloc[0] for pen in pens
+    }
     s02_moderate = next(
         _comp_row for _comp_row in s02_summary if _comp_row["severity"] == "moderate"
     )
@@ -2392,90 +2325,132 @@ def slide_findings(completeness, s01, s01_summary, s02_summary):
         f"{_s01_row['episode_start_date']:%d %b}–{_s01_row['episode_end_date']:%d %b} · "
         f"{_s01_row['episode_span_hours']:.0f} h episode"
     )
-    _before_complete = float(completeness["Before"].min())
-    _during_complete = float(completeness["During"].min())
-    _p103_after = float(
-        completeness.loc[completeness["pen_id"] == "P103", "After"].iloc[0]
+
+    def _val(value, digits=1):
+        return f"{value:.{digits}f}"
+
+    def _change(value, digits=0):
+        return f"{value:+.{digits}f}%"
+
+    def _cell(before_value, period_value, change, *, digits=1, change_digits=0):
+        colour = CORAL_DEEP if change < 0 else TEAL_DEEP
+        return (
+            f'<div style="font-size:10.5px;color:{INK};line-height:1.3;">'
+            f"{_val(before_value, digits)} → {_val(period_value, digits)}</div>"
+            f'<div style="font-size:9.5px;font-weight:700;color:{colour};">'
+            f"{_change(change, change_digits)}</div>"
+        )
+
+    def _pen_label(pen):
+        return (
+            f'<span style="font-family:{MONO};font-size:10.5px;font-weight:700;'
+            f'color:{NAVY};">{pen}</span>'
+        )
+
+    def _col_head(text):
+        return (
+            f'<div style="font-size:8.2px;font-weight:700;letter-spacing:.08em;'
+            f'text-transform:uppercase;color:{MUTED};">{text}</div>'
+        )
+
+    # ---- Card 1: equipment availability -------------------------------
+    availability_rows = "".join(
+        f'<div style="display:grid;grid-template-columns:44px 1fr 1fr;gap:8px;'
+        f'align-items:start;margin-top:9px;">'
+        f"<div>{_pen_label(pen)}</div>"
+        f"<div>{_cell(_pen_rows[pen]['uptime_pct_before'], _pen_rows[pen]['uptime_pct_during'], _pen_rows[pen]['during_change_uptime_pct_pct'], change_digits=1)}</div>"
+        f'<div style="font-size:10.5px;color:{INK};line-height:1.4;">'
+        f"{int(_pen_rows[pen]['positive_uptime_days_during'])} of "
+        f"{int(_pen_rows[pen]['days_during'])} days with uptime</div></div>"
+        for pen in pens
     )
 
-    _pens = [("P101", p101), ("P102", p102), ("P103", p103)]
-    _max_abs = max(abs(_row["during_pct"]) for _, _row in _pens)
-    bars_html = ""
-    for _pen, _row in _pens:
-        _pct = float(_row["during_pct"])
-        _width = max(3, min(96, abs(_pct) / _max_abs * 100))
-        bars_html += (
-            f'<div style="display:grid;grid-template-columns:46px 1fr 66px;'
-            f'gap:12px;align-items:center;">'
-            f'<span style="font-family:{MONO};font-size:10.5px;font-weight:700;'
-            f'color:{NAVY};">{_pen}</span>'
-            f'<div style="height:12px;background:{MIST};border-radius:6px;'
-            f'overflow:hidden;">'
-            f'<div style="width:{_width:.1f}%;height:12px;background:{CORAL};'
-            f'border-radius:6px;"></div></div>'
-            f'<span style="font-size:21px;font-weight:700;color:{CORAL_DEEP};'
-            f'text-align:right;">{fmt_pct(_pct, signed=True)}</span></div>'
+    # ---- Card 2: detection and firing while operating -----------------
+    detection_rows = "".join(
+        f'<div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:7px;'
+        f'align-items:start;margin-top:9px;">'
+        f"<div>{_pen_label(pen)}</div>"
+        f"<div>{_cell(_pen_rows[pen]['det_hr_before'], _pen_rows[pen]['det_hr_during'], _pen_rows[pen]['during_change_det_hr_pct'])}</div>"
+        f"<div>{_cell(_pen_rows[pen]['shots_hr_before'], _pen_rows[pen]['shots_hr_during'], _pen_rows[pen]['during_change_shots_hr_pct'])}</div>"
+        f"<div>{_cell(_pen_rows[pen]['spd_before'], _pen_rows[pen]['spd_during'], _pen_rows[pen]['during_change_spd_pct'], digits=2, change_digits=1)}</div>"
+        f"</div>"
+        for pen in pens
+    )
+
+    # ---- Card 3: after the storm ---------------------------------------
+    after_rows = "".join(
+        f'<div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:7px;'
+        f'align-items:start;margin-top:9px;">'
+        f"<div>{_pen_label(pen)}</div>"
+        f"<div>{_cell(_pen_rows[pen]['uptime_pct_before'], _pen_rows[pen]['uptime_pct_after'], _pen_rows[pen]['after_change_uptime_pct_pct'], change_digits=1)}</div>"
+        f"<div>{_cell(_pen_rows[pen]['det_hr_before'], _pen_rows[pen]['det_hr_after'], _pen_rows[pen]['after_change_det_hr_pct'])}</div>"
+        f"<div>{_cell(_pen_rows[pen]['shots_hr_before'], _pen_rows[pen]['shots_hr_after'], _pen_rows[pen]['after_change_shots_hr_pct'])}</div>"
+        f"</div>"
+        for pen in pens
+    )
+
+    def _card(number, title, body_html, footnote, colour):
+        return (
+            f'<div style="background:{WHITE};border:1px solid {BORDER};'
+            f"border-top:4px solid {colour};border-radius:9px;padding:12px 14px 10px 14px;"
+            f'display:flex;flex-direction:column;box-sizing:border-box;">'
+            f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
+            f'text-transform:uppercase;color:{colour};">{number}</div>'
+            f'<div style="font-size:14.5px;font-weight:700;color:{NAVY};line-height:1.3;'
+            f'margin-top:3px;">{title}</div>'
+            f'<div style="align-self:flex-start;background:{MIST};border-radius:999px;'
+            f"padding:2px 9px;font-size:8.6px;font-weight:650;color:{OCEAN};"
+            f'margin-top:6px;">{_s01_label}</div>'
+            f"{body_html}"
+            f'<div style="margin-top:auto;padding-top:8px;border-top:1px solid {BORDER};'
+            f'font-size:9.2px;line-height:1.4;color:{MUTED};">{footnote}</div></div>'
         )
 
     findings_cards = (
-        f'<div style="display:grid;grid-template-columns:1.08fr .92fr;gap:16px;'
-        f'margin-top:4px;">'
-        # Finding 1
-        f'<div style="background:{WHITE};border:1px solid {BORDER};'
-        f"border-top:4px solid {CORAL};border-radius:9px;padding:14px 16px 12px 16px;"
-        f'display:flex;flex-direction:column;box-sizing:border-box;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
-        f'text-transform:uppercase;color:{CORAL_DEEP};">Finding 1</div>'
-        f'<div style="font-size:15px;font-weight:700;color:{NAVY};line-height:1.3;'
-        f'margin-top:4px;">Firing rates fell across all three S01 pens</div>'
-        f'<div style="font-size:10.5px;line-height:1.4;color:{MUTED};margin-top:4px;">'
-        f"Change in shots per uptime hour, each pen against its own three quiet days."
-        f"</div>"
-        f'<div style="align-self:flex-start;background:{CORAL_SOFT};border-radius:999px;'
-        f"padding:2px 9px;font-size:8.8px;font-weight:650;color:{CORAL_DEEP};"
-        f'margin-top:8px;">{_s01_label}</div>'
-        f'<div style="display:grid;gap:11px;margin-top:14px;">{bars_html}</div>'
-        f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-        f'font-size:9.4px;line-height:1.4;color:{MUTED};">'
-        f'<b style="color:{TEAL_DEEP};">Reporting completeness:</b> '
-        f"{_before_complete:.0%} before and {_during_complete:.0%} during for all "
-        f"three S01 pens.</div></div>"
-        # Finding 2
-        f'<div style="background:{WHITE};border:1px solid {BORDER};'
-        f"border-top:4px solid {OCEAN};border-radius:9px;padding:14px 16px 12px 16px;"
-        f'display:flex;flex-direction:column;box-sizing:border-box;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
-        f'text-transform:uppercase;color:{OCEAN};">Finding 2</div>'
-        f'<div style="font-size:15px;font-weight:700;color:{NAVY};line-height:1.3;'
-        f'margin-top:4px;">The underlying changes were different</div>'
-        f'<div style="margin-top:12px;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.1em;'
-        f'text-transform:uppercase;color:{OCEAN};">P102 · firing activity</div>'
-        f'<div style="font-size:11.5px;line-height:1.5;color:{INK};margin-top:4px;">'
-        f"Operating time barely moved (<b>{fmt_pct1(p102['uptime_pct'], signed=True)}</b>). "
-        f"The rate <b>halved</b> while the laser was running — the clearest sign of "
-        f"reduced firing activity.</div></div>"
-        f'<div style="height:1px;background:{BORDER};margin:12px 0 10px 0;"></div>'
-        f'<div><div style="font-size:8.5px;font-weight:700;letter-spacing:.1em;'
-        f'text-transform:uppercase;color:{CORAL_DEEP};">P101 / P103 · operating time</div>'
-        f'<div style="font-size:11.5px;line-height:1.5;color:{INK};margin-top:4px;">'
-        f"Operating hours fell <b>{fmt_pct(abs(p101['uptime_pct']))} / "
-        f"{fmt_pct(abs(p103['uptime_pct']))}</b>; total shots fell "
-        f"<b>{fmt_pct(abs(p101['shots_pct']))} / {fmt_pct(abs(p103['shots_pct']))}</b>. "
-        f"The volume drop is largely fewer operating hours, not a lower rate alone."
-        f"</div></div>"
-        f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
-        f'font-size:10px;font-weight:650;color:{OCEAN};">'
-        f"Same direction; different mechanism.</div></div></div>"
+        '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;'
+        'margin-top:4px;">'
+        + _card(
+            "1 · Availability",
+            "Uptime fell for P101 and P103; P102 kept operating",
+            availability_rows,
+            "P103's during-period uptime rests on one operating day "
+            "(5 Oct); 6–7 Oct report zero uptime.",
+            CORAL,
+        )
+        + _card(
+            "2 · While operating",
+            "Fewer detections per hour tracked most of the firing drop",
+            detection_rows,
+            "Baseline shots/hour ranges: "
+            f"P101 {_pen_base['P101']['shots_hr_min']:.1f}–{_pen_base['P101']['shots_hr_max']:.1f} · "
+            f"P102 {_pen_base['P102']['shots_hr_min']:.1f}–{_pen_base['P102']['shots_hr_max']:.1f} · "
+            f"P103 {_pen_base['P103']['shots_hr_min']:.1f}–{_pen_base['P103']['shots_hr_max']:.1f}. "
+            "The during changes are large relative to that variation for P101 and "
+            "P102, not for P103.",
+            OCEAN,
+        )
+        + _card(
+            "3 · After the storm",
+            "Uptime mostly recovered; detection and firing rates stayed low",
+            after_rows,
+            "Shots per detection after vs before: "
+            f"P101 {_pen_rows['P101']['after_change_spd_pct']:+.1f}% · "
+            f"P102 {_pen_rows['P102']['after_change_spd_pct']:+.1f}% · "
+            f"P103 {_pen_rows['P103']['after_change_spd_pct']:+.1f}%. "
+            "P103's post-period uses N05 (N03 was reassigned on 8 Oct) and 2 of 3 days "
+            "reported, so it is not like-for-like.",
+            TEAL,
+        )
+        + "</div>"
     )
 
     caveats = [
         (
-            "<b>P103 after-period:</b> "
-            f"{_p103_after:.0%} complete — the 8 Oct node reassignment."
+            "<b>Completeness:</b> 100% before and during for all three S01 pens; "
+            "P103 after is 67% (2 of 3 node-days)."
         ),
         (
-            "<b>S02 much smaller:</b> P201 "
+            "<b>S02 is much quieter:</b> P201 "
             f"{fmt_pct1(s02_moderate['during_pct'], signed=True)} during the moderate "
             f"episode, {fmt_pct1(s02_low['during_pct'], signed=True)} during the low one."
         ),
@@ -2489,21 +2464,20 @@ def slide_findings(completeness, s01, s01_summary, s02_summary):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('08 / What the data shows', 'The storm affected both operating time and laser activity.', 'The strongest signal comes from S01: all three pens recorded lower firing rates, but the underlying changes were different.')}"
+        f"{header('07 / What the data shows', 'Storm periods coincided with lower uptime and fewer detections while nodes were operating.', 'The reduction in shots per operating hour broadly tracked the reduction in detections per operating hour, while shots per detection stayed comparatively stable.')}"
         f"{findings_cards}"
         f'<div style="margin-top:12px;background:#FFF6F3;border-left:3px solid {CORAL};'
         f"border-radius:0 8px 8px 0;padding:9px 14px;display:flex;gap:14px;"
         f'align-items:flex-start;">'
         f'<div style="flex:0 0 92px;">'
         f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
-        f'text-transform:uppercase;color:{CORAL_DEEP};">Finding 3</div>'
+        f'text-transform:uppercase;color:{CORAL_DEEP};">Read with care</div>'
         f'<div style="font-size:10.5px;font-weight:700;color:{NAVY};margin-top:2px;">'
         f"Limits</div></div>"
         f'<div style="display:flex;gap:0;flex:1;">{caveat_html}</div></div>'
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
         f'display:flex;justify-content:space-between;font-size:9.2px;color:{MUTED};">'
-        f"<span>Rates are total shots ÷ total uptime minutes × 60, not an average of "
-        f"daily rates.</span>"
+        f"<span>Rates are totals over each period, not an average of daily rates.</span>"
         f"<span>Uptime is reported on-time, not proof the laser was armed.</span></div>"
         f"</div>"
     )
@@ -2511,6 +2485,7 @@ def slide_findings(completeness, s01, s01_summary, s02_summary):
 
 @app.cell
 def slide_dashboard(
+    episodes,
     fig_periods_dash,
     fig_timeline_dash,
     fish_context,
@@ -2536,86 +2511,96 @@ def slide_dashboard(
             f' <span style="color:{PALETTE["slate"]};">· {note}</span>' if note else ""
         )
         return (
-            f'<span style="font-size:7.9px;line-height:1.25;color:{MUTED};'
+            f'<span style="font-size:9.0px;line-height:1.25;color:{MUTED};'
             f'letter-spacing:.01em;">'
             f'<span style="font-weight:700;text-transform:uppercase;'
-            f'letter-spacing:.08em;font-size:7px;color:{PALETTE["slate"]};">'
+            f'letter-spacing:.08em;font-size:9.0px;color:{PALETTE["slate"]};">'
             f"Source</span>: "
-            f'<span style="font-family:{MONO};font-size:7.6px;color:{OCEAN};">'
+            f'<span style="font-family:{MONO};font-size:9.2px;color:{OCEAN};">'
             f"{model}</span>{suffix}</span>"
         )
 
     def source_caption(model: str, *, note: str = "") -> mo.Html:
         return mo.Html(
-            f'<div style="padding:3px 2px 0 2px;min-height:12px;">'
+            f'<div style="padding:3px 2px 0 2px;min-height:13px;">'
             f"{source_line(model, note=note)}</div>"
         )
 
     kpis = [
-        (f"{totals['shots']:,}", "Laser shots", "14 days · 5 pens", TEAL),
+        (
+            f"{totals['shots']:,}",
+            "Laser shots",
+            f"{totals['days']} days · {totals['pens']} pens",
+            TEAL,
+        ),
         (
             f"{totals['uptime_hours']:,.1f}",
             "Operating hours",
-            "81,570 uptime minutes",
+            f"{totals['uptime_minutes']:,} uptime minutes",
             OCEAN,
         ),
         (f"{totals['detections']:,}", "Lice detections", "camera events", TEAL_SOFT),
         (
             f"{totals['completeness']:.1%}",
             "Reporting completeness",
-            "61 of 63 node-days",
+            f"{totals['reported_node_days']} of {totals['expected_node_days']} node-days",
             CORAL,
         ),
     ]
     kpi_html = "".join(
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
-        f"border-top:3px solid {colour};border-radius:7px;padding:7px 10px;"
+        f"border-top:3px solid {colour};border-radius:7px;padding:4px 7px;"
         f'box-sizing:border-box;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.09em;'
+        f'<div style="font-size:9.2px;font-weight:700;letter-spacing:.09em;'
         f'text-transform:uppercase;color:{MUTED};">{label}</div>'
         f'<div style="font-size:21px;font-weight:700;color:{NAVY};line-height:1.2;'
         f'margin-top:2px;">{value}</div>'
-        f'<div style="font-size:8.5px;color:{MUTED};margin-top:1px;">{sub}</div></div>'
+        f'<div style="font-size:9.2px;color:{MUTED};margin-top:1px;">{sub}</div></div>'
         for value, label, sub, colour in kpis
     )
     top_bar = (
         f'<div style="background:{NAVY};border-radius:9px 9px 0 0;'
-        f"padding:10px 14px;display:flex;justify-content:space-between;"
+        f"padding:7px 11px;display:flex;justify-content:space-between;"
         f'align-items:center;gap:12px;">'
         f'<div><div style="font-size:13px;font-weight:700;color:{WHITE};'
-        f'letter-spacing:-.01em;">Storm impact on laser activity</div>'
-        f'<div style="font-size:8.5px;color:#8FB0AD;margin-top:1px;">'
+        f'letter-spacing:-.01em;">Laser activity around storm periods</div>'
+        f'<div style="font-size:9.2px;color:#8FB0AD;margin-top:1px;">'
         f"Power BI concept · S01 + S02 · 01–14 Oct 2026</div></div>"
         f'<div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">'
         f'<div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;">'
         + "".join(
-            f'<span style="font-size:8px;color:{SEAFOAM};background:#173A52;'
+            f'<span style="font-size:9px;color:{SEAFOAM};background:#173A52;'
             f"border:1px solid #28536C;border-radius:4px;padding:2px 6px;"
             f'white-space:nowrap;">{text}</span>'
-            for text in ["Site: All", "Pen: All", "Episode: S01 high", "01–14 Oct"]
+            for text in [
+                "Site: All",
+                "Pen: All",
+                f"Episodes: all {len(episodes)}",
+                "01–14 Oct",
+            ]
         )
         + "</div>"
-        f'<div style="font-size:7.2px;color:#8FB0AD;letter-spacing:.02em;">'
+        f'<div style="font-size:8.0px;color:#8FB0AD;letter-spacing:.02em;">'
         f'Filters: <span style="font-family:{MONO};">dim_site · dim_pen</span></div>'
         f"</div></div>"
     )
     context_strip = (
         f'<div style="display:grid;grid-template-columns:1.05fr .95fr;gap:8px;">'
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:7px;'
-        f'padding:5px 10px;display:flex;flex-direction:column;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.09em;'
+        f'padding:3px 7px;display:flex;flex-direction:column;">'
+        f'<div style="font-size:9.2px;font-weight:700;letter-spacing:.09em;'
         f'text-transform:uppercase;color:{MUTED};">Missing telemetry</div>'
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
         f'gap:8px;margin-top:4px;">'
         f'<span style="font-size:9.5px;color:{INK};">{missing_names}</span>'
-        f'<span style="font-size:8px;font-weight:650;color:{TEAL_DEEP};'
+        f'<span style="font-size:9px;font-weight:650;color:{TEAL_DEEP};'
         f"background:{SEAFOAM};border-radius:999px;padding:1px 7px;"
         f'white-space:nowrap;">kept null, never zero</span></div>'
         f'<div style="margin-top:auto;padding-top:3px;">'
         f"{source_line('int_node_days_assigned')}</div></div>"
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:7px;'
-        f'padding:5px 10px;display:flex;flex-direction:column;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.09em;'
+        f'padding:3px 7px;display:flex;flex-direction:column;">'
+        f'<div style="font-size:9.2px;font-weight:700;letter-spacing:.09em;'
         f'text-transform:uppercase;color:{MUTED};">Fish-count context</div>'
         f'<div style="font-size:9.5px;color:{INK};margin-top:4px;line-height:1.45;">'
         f"P101 {fish_lookup['P101']} · P102 {fish_lookup['P102']} · "
@@ -2627,26 +2612,26 @@ def slide_dashboard(
     )
     shared_footer = (
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:8px;'
-        f"padding:7px 12px;display:grid;grid-template-columns:auto 1fr;gap:14px;"
+        f"padding:5px 9px;display:grid;grid-template-columns:auto 1fr;gap:14px;"
         f'align-items:center;">'
         f"<div>"
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
+        f'<div style="font-size:9.2px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{MUTED};">Shared dimensions</div>'
         f'<div style="display:flex;gap:5px;margin-top:4px;flex-wrap:wrap;">'
         + "".join(
-            f'<span style="font-family:{MONO};font-size:7.8px;font-weight:600;'
+            f'<span style="font-family:{MONO};font-size:8.6px;font-weight:600;'
             f"color:{TEAL_DEEP};background:{SEAFOAM};border-radius:4px;"
             f'padding:2px 6px;white-space:nowrap;">{dim_name}'
             f'<span style="font-family:{SANS};font-weight:500;color:{MUTED};">'
             f" · both facts</span></span>"
             for dim_name in ["dim_date", "dim_site", "dim_pen"]
         )
-        + f'<span style="font-family:{MONO};font-size:7.8px;color:{CORAL_DEEP};'
+        + f'<span style="font-family:{MONO};font-size:8.6px;color:{CORAL_DEEP};'
         f"background:{CORAL_SOFT};border-radius:4px;padding:2px 6px;"
         f'white-space:nowrap;">dim_storm_episode'
         f'<span style="font-family:{SANS};color:{MUTED};"> · window fact only</span></span>'
         f"</div></div>"
-        f'<div style="border-left:1px solid {BORDER};padding-left:14px;font-size:8.3px;'
+        f'<div style="border-left:1px solid {BORDER};padding-left:14px;font-size:9.0px;'
         f'line-height:1.35;color:{INK};">'
         f"<b>Facts are not joined directly.</b> The daily fact owns overall totals; the "
         f"storm-window fact owns before/during/after comparisons. Shared dimensions keep "
@@ -2656,7 +2641,7 @@ def slide_dashboard(
     )
     timeline_panel = mo.vstack(
         [
-            fig_timeline_dash.properties(height=192),
+            fig_timeline_dash.properties(height=182),
             source_caption(
                 "fct_pen_daily_activity · dim_date · dim_pen · dim_storm_episode",
                 note="bands = storm episodes",
@@ -2667,7 +2652,7 @@ def slide_dashboard(
     )
     periods_panel = mo.vstack(
         [
-            fig_periods_dash.properties(height=192),
+            fig_periods_dash.properties(height=182),
             source_caption("fct_pen_storm_window_day · dim_storm_episode · dim_pen"),
         ],
         gap=0,
@@ -2684,7 +2669,7 @@ def slide_dashboard(
                 f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
                 f'gap:10px;margin-top:4px;padding:0 2px;">'
                 f"{source_line('fct_pen_daily_activity', note='daily operational fact')}"
-                f'<span style="font-size:7.4px;color:{MUTED};">'
+                f'<span style="font-size:8.4px;color:{MUTED};">'
                 f"KPI totals are computed from the fact, never hardcoded</span></div></div>"
             ),
             mo.hstack(
@@ -2696,7 +2681,7 @@ def slide_dashboard(
             mo.Html(context_strip),
             mo.Html(shared_footer),
         ],
-        gap=0.25,
+        gap=0.2,
         align="stretch",
     )
 
@@ -2728,7 +2713,7 @@ def slide_dashboard(
         )
         return (
             f'<div style="background:{WHITE};border:1px solid {BORDER};'
-            f'border-top:3px solid {colour};border-radius:8px;padding:7px 12px;">'
+            f'border-top:3px solid {colour};border-radius:8px;padding:6px 11px;">'
             f'<div style="font-size:8.7px;font-weight:700;letter-spacing:.13em;'
             f'text-transform:uppercase;color:{colour};">{title}</div>'
             f'<div style="margin-top:5px;">{_bullet_block(items, colour)}</div>'
@@ -2744,7 +2729,7 @@ def slide_dashboard(
     mo.vstack(
         [
             header(
-                "09 / The product",
+                "08 / The product",
                 "A reporting view that turns analysis into action.",
                 "Kari can compare activity before, during and after storms, identify pens that need attention and see how complete the underlying data is.",
                 title_size=30,
@@ -2760,8 +2745,10 @@ def slide_dashboard(
 
 @app.cell
 def slide_closing(test_counts, fish_logs):
-    # KEY MESSAGE  Tested transformations, explicit assumptions, and a clear route to production.
-    # SAY          Lead with validation, then the remaining source/deployment limits, then next steps.
+    # KEY MESSAGE  Tested transformations, explicit assumptions, and concrete next
+    #              steps for Kari — observations, hypotheses and investigations.
+    # SAY          Lead with validation, then the remaining source/deployment limits,
+    #              then the recommendations grounded in the verified findings.
     # TRANSITION   "Thank you — questions welcome."
     _unit = sum(test_counts["by_layer"].get("unit", {}).values())
     _data = test_counts["tests"] - _unit
@@ -2797,7 +2784,7 @@ def slide_closing(test_counts, fish_logs):
     ]
     category_rows = "".join(
         f'<div style="display:flex;gap:8px;align-items:flex-start;'
-        f'padding:6px 0;border-top:1px solid {BORDER};">'
+        f'padding:4px 0;border-top:1px solid {BORDER};">'
         f'<span style="flex:0 0 6px;height:6px;margin-top:4px;border-radius:50%;'
         f'background:{_colour};"></span>'
         f'<div style="min-width:0;">'
@@ -2829,14 +2816,14 @@ def slide_closing(test_counts, fish_logs):
     ]
     example_cards = "".join(
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:7px;'
-        f'padding:7px 10px;min-width:0;">'
+        f'padding:5px 8px;min-width:0;">'
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
         f'gap:6px;">'
-        f'<span style="font-size:8px;font-weight:700;letter-spacing:.08em;'
+        f'<span style="font-size:9.5px;font-weight:700;letter-spacing:.08em;'
         f'color:{_colour};">{_tag}</span>'
-        f'<span style="font-family:{MONO};font-size:9px;font-weight:650;color:{NAVY};">'
+        f'<span style="font-family:{MONO};font-size:10px;font-weight:650;color:{NAVY};">'
         f"{_headline}</span></div>"
-        f'<div style="font-size:9.7px;line-height:1.4;color:{INK};margin-top:2px;">'
+        f'<div style="font-size:10.4px;line-height:1.4;color:{INK};margin-top:2px;">'
         f"{_body}</div></div>"
         for _tag, _headline, _body, _colour in _examples
     )
@@ -2856,40 +2843,34 @@ def slide_closing(test_counts, fish_logs):
         ),
         (
             "03",
-            "Runtime portability",
-            "Built and tested on DuckDB only; Snowflake is intended but unproven.",
-            "Validate the Snowflake implementation.",
-        ),
-        (
-            "04",
-            "Source monitoring",
-            "No freshness checks, source contracts or incremental models yet.",
-            "Add contracts and freshness; go incremental when volume justifies it.",
+            "Runtime and source monitoring",
+            "Built and tested on DuckDB only; Snowflake is intended but unproven. No freshness checks, source contracts or incremental models yet.",
+            "Validate the Snowflake implementation; add contracts and freshness, then go incremental when volume justifies it.",
         ),
     ]
     limitation_rows = "".join(
         f'<div style="display:grid;grid-template-columns:22px 1.15fr 22px 1.2fr;'
-        f'gap:8px;align-items:start;padding:6px 0;border-top:1px solid {BORDER};">'
+        f'gap:8px;align-items:start;padding:4px 0;border-top:1px solid {BORDER};">'
         f'<span style="font-family:{MONO};font-size:9px;font-weight:700;'
         f'color:{CORAL_DEEP};padding-top:1px;">{_num}</span>'
-        f'<div><span style="font-size:10.2px;font-weight:700;color:{NAVY};">'
-        f'{_title}</span><div style="font-size:9.6px;line-height:1.35;color:{MUTED};'
+        f'<div><span style="font-size:11.0px;font-weight:700;color:{NAVY};">'
+        f'{_title}</span><div style="font-size:10.4px;line-height:1.35;color:{MUTED};'
         f'margin-top:1px;">{_body}</div></div>'
         f'<span style="color:{TEAL};font-size:12px;font-weight:700;'
         f'text-align:center;padding-top:2px;">→</span>'
-        f'<div style="font-size:10.2px;line-height:1.4;color:{TEAL_DEEP};'
+        f'<div style="font-size:11.0px;line-height:1.4;color:{TEAL_DEEP};'
         f'font-weight:600;">{_next_step}</div></div>'
         for _num, _title, _body, _next_step in limitations
     )
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 8px 6px;">'
-        f"{header('10 / Closing', 'The model is tested. Its assumptions are explicit.', 'Here is what has been validated, what still constrains the conclusions, and what it takes to trust this in production.')}"
+        f"{header('09 / Closing', 'The model is tested. Its assumptions are explicit.', 'Here is what has been validated, what still constrains the conclusions, and what it takes to trust this in production.')}"
         # Validated
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
-        f'<div style="font-size:9px;font-weight:700;letter-spacing:.13em;'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.13em;'
         f'text-transform:uppercase;color:{TEAL_DEEP};">Validated</div>'
-        f'<div style="font-size:9px;color:{MUTED};">'
+        f'<div style="font-size:10px;color:{MUTED};">'
         f"Latest verified dbt build · run_results.json</div></div>"
         f'<div style="display:grid;grid-template-columns:.92fr 1.38fr;gap:12px;'
         f'margin-top:5px;">'
@@ -2899,58 +2880,79 @@ def slide_closing(test_counts, fish_logs):
         f'<span style="font-family:{MONO};font-size:38px;font-weight:700;'
         f'line-height:1;color:{TEAL_DEEP};">{test_counts["tests"]}</span>'
         f'<span style="font-size:10px;color:{MUTED};">tests</span>'
-        f'<span style="margin-left:auto;font-size:8.5px;font-weight:650;'
+        f'<span style="margin-left:auto;font-size:9.5px;font-weight:650;'
         f'color:{TEAL_DEEP};background:{WHITE};border-radius:999px;padding:2px 7px;">'
         f"{_models} models</span></div>"
-        f'<div style="font-size:9.6px;color:{INK};margin-top:6px;">'
+        f'<div style="font-size:10.4px;color:{INK};margin-top:5px;">'
         f"{_pass} pass · {_warn} intentional warn · {_error} errors</div>"
-        f'<div style="font-size:9.5px;line-height:1.4;color:{MUTED};margin-top:4px;">'
+        f'<div style="font-size:10.4px;line-height:1.4;color:{MUTED};margin-top:3px;">'
         f"{_data} generic/singular tests check the actual model data; "
         f"{_unit} unit tests pin controlled edge cases.</div>"
-        f'<div style="font-size:9px;color:{CORAL_DEEP};margin-top:4px;">'
+        f'<div style="font-size:10px;color:{CORAL_DEEP};margin-top:3px;">'
         f"The warn is deliberate: a flagged anomaly, not a failure.</div></div>"
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:9px;'
         f'padding:9px 13px;">'
-        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.1em;'
+        f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.1em;'
         f'text-transform:uppercase;color:{MUTED};margin-bottom:2px;">'
         f"What the tests protect</div>{category_rows}</div></div>"
         f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;'
-        f'margin-top:7px;">{example_cards}</div>'
+        f'margin-top:5px;">{example_cards}</div>'
         # Limitations -> next steps
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-        f'margin-top:10px;">'
-        f'<div style="font-size:9px;font-weight:700;letter-spacing:.13em;'
+        f'margin-top:6px;">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.13em;'
         f'text-transform:uppercase;color:{CORAL_DEEP};">Remaining limitations '
         f"→ next steps</div>"
-        f'<div style="font-size:9px;color:{MUTED};">Highest impact first · '
-        f"DST ambiguity and the zone-in-test detail are in the notes</div></div>"
+        f'<div style="font-size:10px;color:{MUTED};">Highest impact first · '
+        f"timezone and day-boundary assumptions are documented in the notes</div></div>"
         f'<div style="margin-top:3px;">{limitation_rows}</div>'
-        f'<div style="display:flex;gap:12px;align-items:baseline;margin-top:5px;'
-        f"padding:6px 10px;background:#FFF7F4;border-radius:6px;font-size:9.2px;"
-        f'line-height:1.4;color:{INK};">'
-        f'<span style="font-weight:700;color:{CORAL_DEEP};">Before any statistical '
-        f"claim:</span>"
-        f"<span><b>Uptime ≠ laser readiness</b> → intraday telemetry and device "
-        f"status.</span>"
-        f"<span><b>One high-severity episode</b> → more storms before inference.</span>"
+        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
+        f'margin-top:6px;">'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.13em;'
+        f'text-transform:uppercase;color:{TEAL_DEEP};">Recommendations for Kari</div>'
+        f'<div style="font-size:10px;color:{MUTED};">Observations → hypotheses → '
+        f"investigations, not a firing-logic change</div></div>"
+        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;'
+        f'margin-top:4px;">'
+        f'<div style="background:{SEAFOAM};border-left:3px solid {TEAL};'
+        f'border-radius:0 7px 7px 0;padding:6px 9px;">'
+        f'<div style="font-size:10.0px;font-weight:700;color:{TEAL_DEEP};">'
+        f"1 · Equipment availability</div>"
+        f'<div style="font-size:10.4px;line-height:1.4;color:{INK};margin-top:3px;">'
+        f"Investigate power, connectivity and device-status records for pens with "
+        f"substantial reductions in uptime (P101, P103).</div></div>"
+        f'<div style="background:{MIST};border-left:3px solid {OCEAN};'
+        f'border-radius:0 7px 7px 0;padding:6px 9px;">'
+        f'<div style="font-size:10.0px;font-weight:700;color:{OCEAN};">'
+        f"2 · Detection conditions</div>"
+        f'<div style="font-size:10.4px;line-height:1.4;color:{INK};margin-top:3px;">'
+        f"Investigate camera conditions, fish behaviour and lice prevalence where "
+        f"detections per operating hour declined (P101, P102).</div></div>"
+        f'<div style="background:{CORAL_SOFT};border-left:3px solid {CORAL};'
+        f'border-radius:0 7px 7px 0;padding:6px 9px;">'
+        f'<div style="font-size:10.0px;font-weight:700;color:{CORAL_DEEP};">'
+        f"3 · Post-storm monitoring</div>"
+        f'<div style="font-size:10.4px;line-height:1.4;color:{INK};margin-top:3px;">'
+        f"Keep monitoring and compare like-for-like node configurations before "
+        f"drawing conclusions about recovery (P103 moved from N03 to N05).</div></div>"
         f"</div>"
         # Takeaway
         f'<div style="margin-top:auto;background:{NAVY};border-radius:10px;'
-        f'padding:11px 16px;display:flex;gap:14px;align-items:flex-start;">'
+        f'padding:6px 12px;display:flex;gap:14px;align-items:flex-start;">'
         f'<div style="flex:0 0 3px;background:{CORAL};border-radius:2px;'
         f'align-self:stretch;"></div>'
         f'<div style="min-width:0;">'
         f'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:5px;">'
-        f'<span style="font-size:7.5px;font-weight:700;letter-spacing:.08em;'
+        f'<span style="font-size:8.8px;font-weight:700;letter-spacing:.08em;'
         f"color:{SEAFOAM};border:1px solid #2A5A66;border-radius:4px;"
         f'padding:1px 6px;">TESTED ANALYTICS</span>'
-        f'<span style="font-size:7.5px;font-weight:700;letter-spacing:.08em;'
+        f'<span style="font-size:8.8px;font-weight:700;letter-spacing:.08em;'
         f"color:#FFC4B7;border:1px solid #7A3F35;border-radius:4px;"
         f'padding:1px 6px;">DESCRIPTIVE, NOT CAUSAL</span>'
-        f'<span style="font-size:7.5px;font-weight:700;letter-spacing:.08em;'
+        f'<span style="font-size:8.8px;font-weight:700;letter-spacing:.08em;'
         f"color:#B9D6D2;border:1px solid #2A5A66;border-radius:4px;"
         f'padding:1px 6px;">NOT PRODUCTION-READY</span></div>'
-        f'<div style="font-size:13px;line-height:1.5;color:{WHITE};font-weight:500;">'
+        f'<div style="font-size:13.5px;line-height:1.4;color:{WHITE};font-weight:500;">'
         f"The model provides a tested and consistent way to investigate how storms "
         f"relate to laser activity. The patterns are useful, but the current data "
         f"cannot establish causality. With better operational telemetry, more "
