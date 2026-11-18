@@ -1280,10 +1280,9 @@ def slide_title(episodes, totals):
         f'color:#9DC9C5;flex:0 0 72px;">{name}</span>'
         f'<span style="font-size:10.5px;color:#8FB0AD;">{role}</span></div>'
         for name, role in [
-            ("DuckDB", "local analytical warehouse · prototype"),
+            ("DuckDB", "local analytical warehouse"),
             ("dbt", "transformations, data modelling and testing"),
-            ("Snowflake", "intended production data platform"),
-            ("Power BI", "stakeholder-facing reporting"),
+            ("Marimo", "EDA, and presentation"),
         ]
     )
     mo.Html(
@@ -1398,8 +1397,8 @@ def slide_problem():
         f'text-transform:uppercase;color:{CORAL_DEEP};">The problem</div>'
         f'<div style="font-size:24px;line-height:1.35;color:{NAVY};font-weight:600;'
         f'letter-spacing:-.01em;max-width:740px;margin-top:8px;">'
-        f"Farmers report lower laser activity after storms. The key question is "
-        f'whether storms affect <span style="color:{CORAL_DEEP};">equipment availability, laser activity</span> '
+        f"Farmers report lower laser activity after storms. Different "
+        f'possible explanations: <span style="color:{CORAL_DEEP};">equipment availability, laser activity</span> '
         f"or both.</div>"
         f'<div style="font-size:11.5px;color:{MUTED};margin-top:12px;">'
         f"Kari Nordmann · Fish Health Biologist</div>"
@@ -1719,7 +1718,7 @@ def slide_quality(fish_logs, missing_telemetry, test_counts, zero_uptime):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;box-sizing:border-box;'
         f'padding:8px 6px 10px 6px;">'
-        f"{header('03 / Data quality', 'Three data issues that could lead to misleading conclusions.', 'I found three problems in the raw data. Each required a specific modelling decision to keep the analysis reliable.')}"
+        f"{header('03 / Data quality', 'Three data issues that could lead to misleading conclusions.', 'I found three challenges in the raw data. Each required a specific modelling decision to keep the analysis reliable.')}"
         f'<div style="margin-top:2px;">{header_row}{rows_html}</div>'
         f'<div style="display:flex;justify-content:space-between;align-items:center;'
         f'margin-top:10px;padding-top:8px;border-top:1px solid {BORDER};gap:16px;">'
@@ -1987,7 +1986,7 @@ def slide_architecture(analysis, mart_counts, test_counts):
         f'text-transform:uppercase;color:{CORAL_DEEP};">Storm-window fact</div>'
         f'<div style="font-size:11.2px;line-height:1.45;color:{INK};margin-top:2px;">'
         f"One row per pen × storm episode × date · {_storm_rows} rows"
-        f"For before/during/after comparisons."
+        f" For before/during/after comparisons."
         f"</div></div>"
         f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:11px;">'
         + "".join(
@@ -2782,12 +2781,12 @@ def slide_closing(test_counts, fish_logs):
         ),
         (
             "Temporal logic",
-            "Effective-dated assignments, local-day storm exposure, DST boundaries and episode edges.",
+            "Node reassignments, local-day storm exposure.",
             CORAL,
         ),
         (
             "Calculation & data quality",
-            "Missing vs zero, NULL rates, fish plausibility, duplicate resolution and staleness.",
+            "Missing vs zero, NULL rates, fish plausibility, duplicate resolution.",
             TEAL_DEEP,
         ),
     ]
