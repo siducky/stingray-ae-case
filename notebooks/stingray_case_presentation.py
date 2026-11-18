@@ -1154,8 +1154,8 @@ def build_figures(episodes, s01_long, delta_metrics, p201_daily, s02_bands, time
             title=alt.TitleParams(
                 text="Laser activity over time",
                 subtitle="shots per operating hour · coral bands = storm exposure",
-                fontSize=12,
-                subtitleFontSize=9.5,
+                fontSize=14,
+                subtitleFontSize=10.5,
                 anchor="start",
             ),
         ),
@@ -1207,8 +1207,8 @@ def build_figures(episodes, s01_long, delta_metrics, p201_daily, s02_bands, time
             title=alt.TitleParams(
                 text="Before · during · after",
                 subtitle="S01 pens, weighted rate",
-                fontSize=12,
-                subtitleFontSize=9.5,
+                fontSize=14,
+                subtitleFontSize=10.5,
                 anchor="start",
             ),
         ),
@@ -1298,8 +1298,8 @@ def slide_title(episodes, totals):
         f'<span style="color:#7FE0DA;">lasers slow down</span>?</div>'
         f'<div style="font-size:18px;font-weight:650;line-height:1.45;color:#B9D6D2;'
         f'margin-top:16px;max-width:620px;">Storm periods coincided with lower '
-        f"equipment uptime and fewer detections while nodes were operating — "
-        f"shots per detection stayed broadly stable.</div>"
+        f"equipment uptime and fewer detections meanwhile shots per detection "
+        f"stayed broadly stable.</div>"
         f'<div style="font-size:10px;color:#6F8F96;margin-top:10px;">'
         f"Observed association, not a causal claim.</div>"
         f'<div style="margin-top:30px;">'
@@ -1952,7 +1952,7 @@ def slide_architecture(analysis, mart_counts, test_counts):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('05 / Engineering design', 'Layered dbt models, two fact grains, shared dimensions', 'Clear model boundaries, two explicit analytical grains and tested business logic make the results reliable and reusable.')}"
+        f"{header('05 / Engineering design', 'Layered dbt models, two fact grains, shared dimensions', 'Layer boundaries, two explicit fact grains and tested logic — the engineering decisions that keep the analysis trustworthy.')}"
         f'<div style="display:flex;align-items:stretch;gap:5px;margin-top:2px;">'
         f"{rail_html}</div>"
         f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;'
@@ -1964,7 +1964,7 @@ def slide_architecture(analysis, mart_counts, test_counts):
         f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{TEAL_DEEP};">01</div>'
         f'<div style="font-size:14.5px;font-weight:700;color:{NAVY};line-height:1.3;'
-        f'margin-top:3px;">Clear model boundaries</div>'
+        f'margin-top:3px;">Standardise in staging, transform in intermediate</div>'
         f'<div style="margin-top:3px;">{boundary_rows}</div>'
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
         f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
@@ -1976,7 +1976,7 @@ def slide_architecture(analysis, mart_counts, test_counts):
         f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{OCEAN};">02</div>'
         f'<div style="font-size:14.5px;font-weight:700;color:{NAVY};line-height:1.3;'
-        f'margin-top:3px;">Two facts, two questions</div>'
+        f'margin-top:3px;">Two fact grains, deliberately separate</div>'
         f'<div style="margin-top:9px;">'
         f'<div style="font-size:10px;font-weight:700;letter-spacing:.08em;'
         f'text-transform:uppercase;color:{TEAL_DEEP};">Daily activity fact</div>'
@@ -2019,7 +2019,7 @@ def slide_architecture(analysis, mart_counts, test_counts):
         f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{CORAL_DEEP};">03</div>'
         f'<div style="font-size:14.5px;font-weight:700;color:{NAVY};line-height:1.3;'
-        f'margin-top:3px;">Tested business logic</div>'
+        f'margin-top:3px;">Business logic is tested</div>'
         f'<div style="display:flex;align-items:baseline;gap:9px;margin-top:8px;">'
         f'<span style="font-family:{MONO};font-size:30px;font-weight:700;'
         f'line-height:1;color:{NAVY};">{_tests}</span>'
@@ -2198,37 +2198,23 @@ def slide_lineage():
     _dim_cards = "".join(
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
         f'border-left:3px solid {colour};border-radius:6px;padding:7px 9px;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-        f'gap:5px;">'
-        f'<span style="font-family:{MONO};font-size:10.0px;font-weight:700;'
-        f'color:{colour};">{name}</span>'
-        f'<span style="font-size:8.2px;font-weight:700;letter-spacing:.07em;'
-        f'text-transform:uppercase;color:{relation_colour};">{relation}</span></div>'
+        f'<div style="font-family:{MONO};font-size:10.0px;font-weight:700;'
+        f'color:{colour};">{name}</div>'
         f'<div style="font-family:{MONO};font-size:8.6px;color:{MUTED};'
         f'margin-top:3px;overflow-wrap:anywhere;">← {source}</div></div>'
-        for name, source, relation, colour, relation_colour in [
-            ("dim_date", "int_dates", "both facts", TEAL_DEEP, TEAL_DEEP),
+        for name, source, colour in [
+            ("dim_date", "int_dates", TEAL_DEEP),
             (
                 "dim_site",
                 "stg_stingray__node_pen_assignments + stg_stingray__storm_events",
-                "both facts",
-                TEAL_DEEP,
                 TEAL_DEEP,
             ),
             (
                 "dim_pen",
                 "stg_stingray__node_pen_assignments + int_fish_counts_validated",
-                "both facts",
-                TEAL_DEEP,
                 TEAL_DEEP,
             ),
-            (
-                "dim_storm_episode",
-                "int_storm_episodes",
-                "window fact only",
-                CORAL_DEEP,
-                CORAL_DEEP,
-            ),
+            ("dim_storm_episode", "int_storm_episodes", CORAL_DEEP),
         ]
     )
 
@@ -2271,22 +2257,16 @@ def slide_lineage():
         f"{_group_html}</div>"
         f"{_arrow}"
         f'<div style="display:flex;flex-direction:column;height:100%;">'
-        f"{_section_head('Reporting marts', 'Two facts · four dimensions', '#1B5E20')}"
+        f"{_section_head('Reporting marts', 'Produced by the transformations', '#1B5E20')}"
         f"{_facts_html}"
-        f'<div style="margin-top:auto;padding:9px 11px;background:{MIST};'
-        f'border-radius:6px;font-size:9.0px;line-height:1.45;color:{INK};">'
-        f"<b>No fact-to-fact join.</b> The daily fact owns overall totals; the "
-        f"storm-window fact owns event comparisons. Storm exposure is site-level, "
-        f"repeated across pens — never sum it across pens.</div>"
         f"</div></div></div>"
         f'<div style="margin-top:6px;">'
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
         f'margin:0 2px 4px 2px;">'
         f'<span style="font-size:8.6px;font-weight:700;letter-spacing:.12em;'
-        f'text-transform:uppercase;color:{MUTED};">Dimensions</span>'
+        f'text-transform:uppercase;color:{MUTED};">Dimension marts</span>'
         f'<span style="font-size:9.0px;color:{MUTED};">'
-        f"dim_date · dim_site · dim_pen filter both facts; dim_storm_episode filters "
-        f"the storm-window fact only.</span></div>"
+        f"Upstream models for each dimension</span></div>"
         f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;">'
         f"{_dim_cards}</div></div>"
         f'<div style="margin-top:12px;padding:10px 40px 0 0;'
@@ -2304,9 +2284,10 @@ def slide_lineage():
 
 @app.cell
 def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
-    # KEY MESSAGE  Storm periods coincided with lower uptime and fewer detections
-    #              while nodes were operating; shots per detection stayed broadly stable.
-    # SAY          Availability -> detection and firing while operating -> after the storm.
+    # KEY MESSAGE  Storm exposure coincided with lower uptime and detection activity,
+    #              but the pattern differed by pen; P103 is limited evidence.
+    # SAY          Availability -> activity while operating -> firing intensity ->
+    #              after the storm -> limits.
     # TRANSITION   "How would Kari use this without me in the room?"
     pens = ["P101", "P102", "P103"]
     _pen_rows = {pen: s01_metrics[s01_metrics["pen_id"] == pen].iloc[0] for pen in pens}
@@ -2332,19 +2313,34 @@ def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
     def _change(value, digits=0):
         return f"{value:+.{digits}f}%"
 
-    def _cell(before_value, period_value, change, *, digits=1, change_digits=0):
-        colour = CORAL_DEEP if change < 0 else TEAL_DEEP
-        return (
-            f'<div style="font-size:10.5px;color:{INK};line-height:1.3;">'
-            f"{_val(before_value, digits)} → {_val(period_value, digits)}</div>"
-            f'<div style="font-size:9.5px;font-weight:700;color:{colour};">'
-            f"{_change(change, change_digits)}</div>"
+    def _pen_label(pen, *, limited=False):
+        suffix = (
+            f'<span style="font-size:8px;font-weight:700;color:{MUTED};">*</span>'
+            if limited
+            else ""
         )
-
-    def _pen_label(pen):
+        colour = MUTED if limited else NAVY
         return (
             f'<span style="font-family:{MONO};font-size:10.5px;font-weight:700;'
-            f'color:{NAVY};">{pen}</span>'
+            f'color:{colour};">{pen}{suffix}</span>'
+        )
+
+    def _cell(
+        before_value,
+        period_value,
+        change,
+        *,
+        digits=1,
+        change_digits=0,
+        limited=False,
+    ):
+        text_colour = MUTED if limited else INK
+        change_colour = MUTED if limited else (CORAL_DEEP if change < 0 else TEAL_DEEP)
+        return (
+            f'<div style="font-size:10.5px;color:{text_colour};line-height:1.3;">'
+            f"{_val(before_value, digits)} → {_val(period_value, digits)}</div>"
+            f'<div style="font-size:9.5px;font-weight:700;color:{change_colour};">'
+            f"{_change(change, change_digits)}</div>"
         )
 
     def _col_head(text):
@@ -2357,35 +2353,45 @@ def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
     availability_rows = "".join(
         f'<div style="display:grid;grid-template-columns:44px 1fr 1fr;gap:8px;'
         f'align-items:start;margin-top:9px;">'
-        f"<div>{_pen_label(pen)}</div>"
-        f"<div>{_cell(_pen_rows[pen]['uptime_pct_before'], _pen_rows[pen]['uptime_pct_during'], _pen_rows[pen]['during_change_uptime_pct_pct'], change_digits=1)}</div>"
-        f'<div style="font-size:10.5px;color:{INK};line-height:1.4;">'
+        f"<div>{_pen_label(pen, limited=pen == 'P103')}</div>"
+        f"<div>{_cell(_pen_rows[pen]['uptime_pct_before'], _pen_rows[pen]['uptime_pct_during'], _pen_rows[pen]['during_change_uptime_pct_pct'], change_digits=1, limited=pen == 'P103')}</div>"
+        f'<div style="font-size:10.5px;color:{MUTED if pen == "P103" else INK};line-height:1.4;">'
         f"{int(_pen_rows[pen]['positive_uptime_days_during'])} of "
         f"{int(_pen_rows[pen]['days_during'])} days with uptime</div></div>"
         for pen in pens
     )
 
-    # ---- Card 2: detection and firing while operating -----------------
-    detection_rows = "".join(
-        f'<div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:7px;'
+    # ---- Card 2: activity while operating -----------------------------
+    activity_rows = "".join(
+        f'<div style="display:grid;grid-template-columns:44px 1fr 1fr;gap:8px;'
         f'align-items:start;margin-top:9px;">'
-        f"<div>{_pen_label(pen)}</div>"
-        f"<div>{_cell(_pen_rows[pen]['det_hr_before'], _pen_rows[pen]['det_hr_during'], _pen_rows[pen]['during_change_det_hr_pct'])}</div>"
-        f"<div>{_cell(_pen_rows[pen]['shots_hr_before'], _pen_rows[pen]['shots_hr_during'], _pen_rows[pen]['during_change_shots_hr_pct'])}</div>"
-        f"<div>{_cell(_pen_rows[pen]['spd_before'], _pen_rows[pen]['spd_during'], _pen_rows[pen]['during_change_spd_pct'], digits=2, change_digits=1)}</div>"
+        f"<div>{_pen_label(pen, limited=pen == 'P103')}</div>"
+        f"<div>{_cell(_pen_rows[pen]['det_hr_before'], _pen_rows[pen]['det_hr_during'], _pen_rows[pen]['during_change_det_hr_pct'], limited=pen == 'P103')}</div>"
+        f"<div>{_cell(_pen_rows[pen]['shots_hr_before'], _pen_rows[pen]['shots_hr_during'], _pen_rows[pen]['during_change_shots_hr_pct'], limited=pen == 'P103')}</div>"
         f"</div>"
         for pen in pens
     )
 
-    # ---- Card 3: after the storm ---------------------------------------
-    after_rows = "".join(
-        f'<div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr;gap:7px;'
+    # ---- Card 3: firing intensity relative to detections --------------
+    firing_rows = "".join(
+        f'<div style="display:grid;grid-template-columns:44px 1fr;gap:8px;'
         f'align-items:start;margin-top:9px;">'
-        f"<div>{_pen_label(pen)}</div>"
-        f"<div>{_cell(_pen_rows[pen]['uptime_pct_before'], _pen_rows[pen]['uptime_pct_after'], _pen_rows[pen]['after_change_uptime_pct_pct'], change_digits=1)}</div>"
-        f"<div>{_cell(_pen_rows[pen]['det_hr_before'], _pen_rows[pen]['det_hr_after'], _pen_rows[pen]['after_change_det_hr_pct'])}</div>"
-        f"<div>{_cell(_pen_rows[pen]['shots_hr_before'], _pen_rows[pen]['shots_hr_after'], _pen_rows[pen]['after_change_shots_hr_pct'])}</div>"
+        f"<div>{_pen_label(pen, limited=pen == 'P103')}</div>"
+        f"<div>{_cell(_pen_rows[pen]['spd_before'], _pen_rows[pen]['spd_during'], _pen_rows[pen]['during_change_spd_pct'], digits=2, change_digits=1, limited=pen == 'P103')}</div>"
         f"</div>"
+        for pen in pens
+    )
+
+    after_rows = "".join(
+        f'<div style="display:grid;grid-template-columns:52px 1fr;gap:10px;'
+        f'align-items:baseline;padding:4px 0;border-top:1px solid {BORDER};">'
+        f"<div>{_pen_label(pen, limited=pen == 'P103')}</div>"
+        f'<div style="font-size:10.2px;color:{MUTED if pen == "P103" else INK};line-height:1.4;">'
+        f"uptime {_change(_pen_rows[pen]['after_change_uptime_pct_pct'], 1)} · "
+        f"detections/hour {_change(_pen_rows[pen]['after_change_det_hr_pct'])} · "
+        f"shots/hour {_change(_pen_rows[pen]['after_change_shots_hr_pct'])} · "
+        f"shots/detection {_change(_pen_rows[pen]['after_change_spd_pct'], 1)}"
+        f"</div></div>"
         for pen in pens
     )
 
@@ -2418,27 +2424,25 @@ def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
             CORAL,
         )
         + _card(
-            "2 · While operating",
+            "2 · Activity while operating",
             "Fewer detections per hour tracked most of the firing drop",
-            detection_rows,
+            activity_rows,
             "Baseline shots/hour ranges: "
             f"P101 {_pen_base['P101']['shots_hr_min']:.1f}–{_pen_base['P101']['shots_hr_max']:.1f} · "
             f"P102 {_pen_base['P102']['shots_hr_min']:.1f}–{_pen_base['P102']['shots_hr_max']:.1f} · "
             f"P103 {_pen_base['P103']['shots_hr_min']:.1f}–{_pen_base['P103']['shots_hr_max']:.1f}. "
-            "The during changes are large relative to that variation for P101 and "
-            "P102, not for P103.",
+            "The changes are large relative to baseline variation for P101 and P102, "
+            "not for P103.",
             OCEAN,
         )
         + _card(
-            "3 · After the storm",
-            "Uptime mostly recovered; detection and firing rates stayed low",
-            after_rows,
-            "Shots per detection after vs before: "
-            f"P101 {_pen_rows['P101']['after_change_spd_pct']:+.1f}% · "
+            "3 · Firing intensity",
+            "Shots per detection stayed comparatively stable",
+            firing_rows,
+            "shots/hour = detections/hour × shots/detection. "
+            f"After vs before: P101 {_pen_rows['P101']['after_change_spd_pct']:+.1f}% · "
             f"P102 {_pen_rows['P102']['after_change_spd_pct']:+.1f}% · "
-            f"P103 {_pen_rows['P103']['after_change_spd_pct']:+.1f}%. "
-            "P103's post-period uses N05 (N03 was reassigned on 8 Oct) and 2 of 3 days "
-            "reported, so it is not like-for-like.",
+            f"P103 {_pen_rows['P103']['after_change_spd_pct']:+.1f}%.",
             TEAL,
         )
         + "</div>"
@@ -2464,18 +2468,29 @@ def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('07 / What the data shows', 'Storm periods coincided with lower uptime and fewer detections while nodes were operating.', 'The reduction in shots per operating hour broadly tracked the reduction in detections per operating hour, while shots per detection stayed comparatively stable.')}"
+        f"{header('07 / What the data shows', 'Storm exposure coincided with lower uptime and detection activity — but patterns differed by pen.', 'P101 and P102 provide the more informative evidence while operating; P103 is shown for completeness, but its during-period rate rests on one operating day.')}"
+        f'<div style="display:flex;gap:16px;align-items:baseline;margin:2px 2px 0 2px;'
+        f'font-size:9px;color:{MUTED};">'
+        f'<span><b style="color:{NAVY};">P101 · P102</b> primary evidence</span>'
+        f'<span><b style="color:{MUTED};">P103*</b> limited evidence — one operating day during the storm</span></div>'
         f"{findings_cards}"
-        f'<div style="margin-top:12px;background:#FFF6F3;border-left:3px solid {CORAL};'
-        f"border-radius:0 8px 8px 0;padding:9px 14px;display:flex;gap:14px;"
+        f'<div style="margin-top:10px;background:{WHITE};border:1px solid {BORDER};'
+        f'border-radius:8px;padding:7px 12px;display:flex;gap:12px;align-items:flex-start;">'
+        f'<div style="flex:0 0 122px;">'
+        f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
+        f'text-transform:uppercase;color:{TEAL_DEEP};">After the storm</div>'
+        f'<div style="font-size:9.5px;color:{MUTED};margin-top:2px;">vs same pre-storm baseline</div></div>'
+        f'<div style="flex:1;display:grid;grid-template-columns:1fr;gap:0;">{after_rows}</div></div>'
+        f'<div style="margin-top:8px;background:#FFF6F3;border-left:3px solid {CORAL};'
+        f"border-radius:0 8px 8px 0;padding:7px 12px;display:flex;gap:12px;"
         f'align-items:flex-start;">'
-        f'<div style="flex:0 0 92px;">'
+        f'<div style="flex:0 0 84px;">'
         f'<div style="font-size:8.5px;font-weight:700;letter-spacing:.12em;'
         f'text-transform:uppercase;color:{CORAL_DEEP};">Read with care</div>'
-        f'<div style="font-size:10.5px;font-weight:700;color:{NAVY};margin-top:2px;">'
+        f'<div style="font-size:10px;font-weight:700;color:{NAVY};margin-top:2px;">'
         f"Limits</div></div>"
         f'<div style="display:flex;gap:0;flex:1;">{caveat_html}</div></div>'
-        f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
+        f'<div style="margin-top:auto;padding-top:7px;border-top:1px solid {BORDER};'
         f'display:flex;justify-content:space-between;font-size:9.2px;color:{MUTED};">'
         f"<span>Rates are totals over each period, not an average of daily rates.</span>"
         f"<span>Uptime is reported on-time, not proof the laser was armed.</span></div>"
@@ -2511,12 +2526,12 @@ def slide_dashboard(
             f' <span style="color:{PALETTE["slate"]};">· {note}</span>' if note else ""
         )
         return (
-            f'<span style="font-size:9.0px;line-height:1.25;color:{MUTED};'
+            f'<span style="font-size:8.2px;line-height:1.25;color:{MUTED};'
             f'letter-spacing:.01em;">'
             f'<span style="font-weight:700;text-transform:uppercase;'
-            f'letter-spacing:.08em;font-size:9.0px;color:{PALETTE["slate"]};">'
+            f'letter-spacing:.08em;font-size:7.4px;color:{PALETTE["slate"]};">'
             f"Source</span>: "
-            f'<span style="font-family:{MONO};font-size:9.2px;color:{OCEAN};">'
+            f'<span style="font-family:{MONO};font-size:7.8px;color:{OCEAN};">'
             f"{model}</span>{suffix}</span>"
         )
 
@@ -2551,11 +2566,11 @@ def slide_dashboard(
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
         f"border-top:3px solid {colour};border-radius:7px;padding:4px 7px;"
         f'box-sizing:border-box;">'
-        f'<div style="font-size:9.2px;font-weight:700;letter-spacing:.09em;'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.09em;'
         f'text-transform:uppercase;color:{MUTED};">{label}</div>'
-        f'<div style="font-size:21px;font-weight:700;color:{NAVY};line-height:1.2;'
+        f'<div style="font-size:24px;font-weight:700;color:{NAVY};line-height:1.15;'
         f'margin-top:2px;">{value}</div>'
-        f'<div style="font-size:9.2px;color:{MUTED};margin-top:1px;">{sub}</div></div>'
+        f'<div style="font-size:9.0px;color:{MUTED};margin-top:1px;">{sub}</div></div>'
         for value, label, sub, colour in kpis
     )
     top_bar = (
@@ -2588,7 +2603,7 @@ def slide_dashboard(
         f'<div style="display:grid;grid-template-columns:1.05fr .95fr;gap:8px;">'
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:7px;'
         f'padding:3px 7px;display:flex;flex-direction:column;">'
-        f'<div style="font-size:9.2px;font-weight:700;letter-spacing:.09em;'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.09em;'
         f'text-transform:uppercase;color:{MUTED};">Missing telemetry</div>'
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
         f'gap:8px;margin-top:4px;">'
@@ -2600,7 +2615,7 @@ def slide_dashboard(
         f"{source_line('int_node_days_assigned')}</div></div>"
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:7px;'
         f'padding:3px 7px;display:flex;flex-direction:column;">'
-        f'<div style="font-size:9.2px;font-weight:700;letter-spacing:.09em;'
+        f'<div style="font-size:10px;font-weight:700;letter-spacing:.09em;'
         f'text-transform:uppercase;color:{MUTED};">Fish-count context</div>'
         f'<div style="font-size:9.5px;color:{INK};margin-top:4px;line-height:1.45;">'
         f"P101 {fish_lookup['P101']} · P102 {fish_lookup['P102']} · "
@@ -2831,21 +2846,21 @@ def slide_closing(test_counts, fish_logs):
     limitations = [
         (
             "01",
-            "Time and calendar assumptions",
-            "Every log and activity date is assumed Europe/Oslo; the day boundary is inferred from a date.",
+            "Source assumptions",
+            "Timezone and inferred reporting-day boundaries: every log and activity date is assumed Europe/Oslo.",
             "Add a site→timezone lookup; confirm reporting-day semantics.",
         ),
         (
             "02",
-            "End-of-period visibility",
-            "The window ends at the last observed activity date, so a late outage could be invisible.",
-            "Add a declared reporting end that extends the date spine.",
+            "Data coverage",
+            "Short observation window and missing telemetry: the window ends at the last observed activity date, and some node-days are missing.",
+            "Extend the observation window; add device-status and freshness checks.",
         ),
         (
             "03",
-            "Runtime and source monitoring",
-            "Built and tested on DuckDB only; Snowflake is intended but unproven. No freshness checks, source contracts or incremental models yet.",
-            "Validate the Snowflake implementation; add contracts and freshness, then go incremental when volume justifies it.",
+            "Production readiness",
+            "Snowflake validation, freshness monitoring and source contracts are not yet in place.",
+            "Validate Snowflake; add freshness monitoring and source contracts.",
         ),
     ]
     limitation_rows = "".join(
@@ -2904,7 +2919,7 @@ def slide_closing(test_counts, fish_logs):
         f'text-transform:uppercase;color:{CORAL_DEEP};">Remaining limitations '
         f"→ next steps</div>"
         f'<div style="font-size:10px;color:{MUTED};">Highest impact first · '
-        f"timezone and day-boundary assumptions are documented in the notes</div></div>"
+        f"observations, hypotheses and recommended investigations</div></div>"
         f'<div style="margin-top:3px;">{limitation_rows}</div>'
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
         f'margin-top:6px;">'
