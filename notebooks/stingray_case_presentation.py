@@ -1355,7 +1355,7 @@ def slide_problem():
             "Changed detection conditions",
             (
                 "Fish behaviour or detection conditions may affect lice detections and, "
-                "subsequently, the shots fired — a hypothesis that must be investigated."
+                "subsequently, the shots fired."
             ),
             TEAL_DEEP,
         ),
@@ -1515,7 +1515,7 @@ def slide_sources(daily, source_counts):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;box-sizing:border-box;'
         f'padding:8px 6px 10px 6px;">'
-        f"{header('02 / Understanding the data', 'Four data sources. One consistent daily view.', 'Each file tells us something different about the equipment, storms or fish population. Before comparing them, we need to align their dates and levels of detail.')}"
+        f"{header('02 / Understanding the data', 'Four data sources.', 'Each file tells us something different about the equipment, storms or fish population. Before comparing them, we need to align their dates and levels of detail.')}"
         f'<div style="display:grid;grid-template-columns:1fr 178px;gap:20px;'
         f'align-items:stretch;margin-top:2px;">'
         f"<div>{source_html}</div>{spine}</div>"
@@ -2752,7 +2752,7 @@ def slide_dashboard(
 
 
 @app.cell
-def slide_closing(test_counts, fish_logs):
+def slide_closing(test_counts):
     # KEY MESSAGE  Tested transformations, explicit assumptions, and concrete next
     #              steps for Kari — observations, hypotheses and investigations.
     # SAY          Lead with validation, then the remaining source/deployment limits,
@@ -2764,8 +2764,11 @@ def slide_closing(test_counts, fish_logs):
     _pass = test_counts["pass"]
     _warn = test_counts["warn"]
     _error = test_counts["error"]
-    _anomaly = int(
-        fish_logs[~fish_logs["is_fish_count_plausible"]].iloc[0]["fish_count"]
+    _manifest = json.loads(Path("target/manifest.json").read_text())
+    _singular = sum(
+        1
+        for _node in _manifest["nodes"].values()
+        if _node.get("resource_type") == "test" and _node.get("test_metadata") is None
     )
 
     categories = [
@@ -2800,40 +2803,6 @@ def slide_closing(test_counts, fish_logs):
         f'<span style="font-size:9.9px;line-height:1.4;color:{MUTED};">{_body}</span>'
         f"</div></div>"
         for _name, _body, _colour in categories
-    )
-
-    _examples = [
-        (
-            "UNIT TEST",
-            "N05 · 8 Oct",
-            "New assignment applied; missing telemetry stays missing.",
-            TEAL,
-        ),
-        (
-            "UNIT + SINGULAR",
-            "ST-0041 · 36 h",
-            "300 / 1,440 / 420 minutes across three Oslo days.",
-            TEAL,
-        ),
-        (
-            "WARN TEST",
-            f"P201 · {_anomaly:,}",
-            "Flagged, not corrected or removed.",
-            CORAL,
-        ),
-    ]
-    example_cards = "".join(
-        f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:7px;'
-        f'padding:5px 8px;min-width:0;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
-        f'gap:6px;">'
-        f'<span style="font-size:9.5px;font-weight:700;letter-spacing:.08em;'
-        f'color:{_colour};">{_tag}</span>'
-        f'<span style="font-family:{MONO};font-size:10px;font-weight:650;color:{NAVY};">'
-        f"{_headline}</span></div>"
-        f'<div style="font-size:10.4px;line-height:1.4;color:{INK};margin-top:2px;">'
-        f"{_body}</div></div>"
-        for _tag, _headline, _body, _colour in _examples
     )
 
     limitations = [
@@ -2884,27 +2853,28 @@ def slide_closing(test_counts, fish_logs):
         f'margin-top:5px;">'
         f'<div style="background:{SEAFOAM};border:1px solid #B9DDD6;border-radius:9px;'
         f'padding:11px 13px;">'
-        f'<div style="display:flex;align-items:baseline;gap:8px;">'
-        f'<span style="font-family:{MONO};font-size:38px;font-weight:700;'
-        f'line-height:1;color:{TEAL_DEEP};">{test_counts["tests"]}</span>'
-        f'<span style="font-size:10px;color:{MUTED};">tests</span>'
+        f'<div style="display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;">'
+        f'<span style="font-family:{MONO};font-size:30px;font-weight:700;'
+        f'line-height:1;color:{TEAL_DEEP};">{_unit}</span>'
+        f'<span style="font-size:10px;color:{MUTED};">unit tests</span>'
+        f'<span style="font-family:{MONO};font-size:20px;font-weight:700;'
+        f'line-height:1;color:{CORAL_DEEP};margin-left:4px;">{_singular}</span>'
+        f'<span style="font-size:10px;color:{MUTED};">singular invariants</span>'
         f'<span style="margin-left:auto;font-size:9.5px;font-weight:650;'
         f'color:{TEAL_DEEP};background:{WHITE};border-radius:999px;padding:2px 7px;">'
-        f"{_models} models</span></div>"
+        f"{test_counts['tests']} total checks · {_models} models</span></div>"
         f'<div style="font-size:10.4px;color:{INK};margin-top:5px;">'
         f"{_pass} pass · {_warn} intentional warn · {_error} errors</div>"
-        f'<div style="font-size:10.4px;line-height:1.4;color:{MUTED};margin-top:3px;">'
-        f"{_data} generic/singular tests check the actual model data; "
-        f"{_unit} unit tests pin controlled edge cases.</div>"
+        f'<div style="font-size:10.2px;line-height:1.35;color:{MUTED};margin-top:3px;">'
+        f"{_data} checks are mostly column-level guardrails; the "
+        f"{_unit} unit and {_singular} singular tests protect the analytical edge cases.</div>"
         f'<div style="font-size:10px;color:{CORAL_DEEP};margin-top:3px;">'
-        f"The warn is deliberate: a flagged anomaly (high fish population).</div></div>"
+        f"One deliberate warning: a flagged anomaly (high fish population).</div></div>"
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:9px;'
         f'padding:9px 13px;">'
         f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.1em;'
         f'text-transform:uppercase;color:{MUTED};margin-bottom:2px;">'
         f"What the tests protect</div>{category_rows}</div></div>"
-        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;'
-        f'margin-top:5px;">{example_cards}</div>'
         # Limitations -> next steps
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
         f'margin-top:6px;">'
