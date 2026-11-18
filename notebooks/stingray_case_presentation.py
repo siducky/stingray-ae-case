@@ -1326,7 +1326,7 @@ def slide_problem():
     # SAY          Problem statement, three explanations, then the three questions.
     # TRANSITION   "Before I can answer that, here is the data we actually have."
     questions = [
-        ("01", "Does laser activity change during storms?"),
+        ("01", "Does node activity change during storms?"),
         ("02", "Are some pens or sites more affected than others?"),
         ("03", "Does activity recover after the storm?"),
     ]
@@ -1511,7 +1511,7 @@ def slide_sources(daily, source_counts):
         f'<div style="font-size:10px;color:{MUTED};">pen-days</div>'
         f'<div style="height:1px;background:#B9DDD6;margin:12px 0;"></div>'
         f'<div style="font-size:10px;line-height:1.4;color:{MUTED};">One row per site, '
-        f"pen and day — every comparison starts here.</div></div>"
+        f"pen and day: Allows consistent comparison across pens and dates.</div></div>"
     )
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;box-sizing:border-box;'
@@ -1523,22 +1523,21 @@ def slide_sources(daily, source_counts):
         f'<div style="margin-top:16px;padding:11px 14px;background:{WHITE};'
         f"border-left:3px solid {CORAL};border-radius:0 8px 8px 0;"
         f'font-size:12.5px;line-height:1.5;color:{INK};">'
-        f"<b>The main challenge is getting the timing right.</b> Equipment records are "
-        f"daily, storm events have exact start and end times, and fish counts are entered "
-        f"manually. I align these sources to the same local calendar day before comparing "
+        f"<b>The main challenge is different table grains.</b> Node activity is per "
+        f"node and day, storm events have exact start and end timestamps, and fish counts are entered "
+        f"manually per pen. I align these sources to the same local calendar day before comparing "
         f"them.</div>"
         f'<div style="margin-top:9px;padding-left:14px;border-left:3px solid {TEAL};'
         f'font-size:12px;line-height:1.5;color:{INK};">'
         f"Some pen-days ({incomplete_pen_days} of {len(daily)}) have incomplete equipment "
-        f"records. I keep missing values separate from reported zero activity, so missing "
+        f"records. Distinction is kept, so missing "
         f"data is never mistaken for a machine that stopped operating.</div>"
         f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:30px;'
         f'margin-top:auto;padding-top:12px;border-top:1px solid {BORDER};">'
         f'<div><div style="font-size:9px;font-weight:700;letter-spacing:.13em;'
         f'text-transform:uppercase;color:{MUTED};">What the extract does not contain</div>'
         f'<div style="font-size:11.5px;line-height:1.45;color:{INK};margin-top:4px;">'
-        f"No site names, geographical information or additional pen details. I retain "
-        f"the original site and pen IDs rather than inventing missing information.</div></div>"
+        f"No site names, geographical information or additional pen details.</div></div>"
         f'<div><div style="font-size:9px;font-weight:700;letter-spacing:.13em;'
         f'text-transform:uppercase;color:{MUTED};">What the model adds</div>'
         f'<div style="font-size:11.5px;line-height:1.45;color:{INK};margin-top:4px;">'
@@ -1560,7 +1559,7 @@ def slide_quality(fish_logs, missing_telemetry, test_counts, zero_uptime):
     p201_log = fish_logs[
         (fish_logs["pen_id"] == "P201") & (~fish_logs["is_fish_count_plausible"])
     ].iloc[0]
-    unit_tests = sum(test_counts["by_layer"]["unit"].values())
+    unit_tests = sum(test_counts["by_layer"].get("unit", {}).values())
     missing_text = ", ".join(
         f"{_row.node_id} {_row.activity_date:%d %b}"
         for _row in missing_telemetry.itertuples()
@@ -1662,7 +1661,7 @@ def slide_quality(fish_logs, missing_telemetry, test_counts, zero_uptime):
             ),
             (
                 "I create an expected record for every node and day it should be assigned. "
-                "This lets me distinguish missing data from reported zero operating time."
+                "Missing data gets NULL, reported zeroes remain zero."
             ),
         ),
         (
@@ -1833,7 +1832,7 @@ def slide_method(daily):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('04 / Metrics', 'More shots don’t necessarily mean more activity.', 'Looking at operating time, detection activity and laser firing paints a complete picture and helps understand what changes after a storm.')}"
+        f"{header('04 / Metrics', 'How to quantify laser activity?', 'Looking at operating time, detection activity and laser firing paints a complete picture and helps understand what changes after a storm.')}"
         f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;'
         f'margin-top:6px;">{cards_html}</div>'
         f'<div style="display:flex;justify-content:space-between;align-items:center;'
@@ -1918,12 +1917,12 @@ def slide_architecture(analysis, mart_counts, test_counts):
     boundaries = [
         (
             "Staging",
-            "Preserve the source: rename, cast and normalise timestamps.",
+            "One model per source: rename, cast and normalise timestamps.",
             TEAL,
         ),
         (
             "Intermediate",
-            "Business logic: temporal joins, validation and aggregation.",
+            "Business logic: node-day records, aggregate activity into pen-level, storm exposure.",
             CORAL,
         ),
         ("Marts", "Business-ready facts and dimensions for reporting.", OCEAN),
@@ -1952,7 +1951,7 @@ def slide_architecture(analysis, mart_counts, test_counts):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('05 / Engineering design', 'Layered dbt models, two fact grains, shared dimensions', 'Layer boundaries, two explicit fact grains and tested logic — the engineering decisions that keep the analysis trustworthy.')}"
+        f"{header('05 / Engineering design', 'dbt models: two facts, shared dimensions', 'Three layers: staging, intermediate & marts.')}"
         f'<div style="display:flex;align-items:stretch;gap:5px;margin-top:2px;">'
         f"{rail_html}</div>"
         f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;'
@@ -1968,7 +1967,7 @@ def slide_architecture(analysis, mart_counts, test_counts):
         f'<div style="margin-top:3px;">{boundary_rows}</div>'
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
         f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
-        f"Each layer has one job; logic does not leak into reports.</div></div>"
+        f"Each layer has one job.</div></div>"
         # 2 - two facts and shared dimensions
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
         f"border-top:4px solid {OCEAN};border-radius:9px;padding:13px 15px 11px 15px;"
@@ -1981,14 +1980,14 @@ def slide_architecture(analysis, mart_counts, test_counts):
         f'<div style="font-size:10px;font-weight:700;letter-spacing:.08em;'
         f'text-transform:uppercase;color:{TEAL_DEEP};">Daily activity fact</div>'
         f'<div style="font-size:11.2px;line-height:1.45;color:{INK};margin-top:2px;">'
-        f"One row per site × pen × date · {_daily_rows} rows. The additive source of "
-        f"truth for overall totals.</div></div>"
+        f"One row per site × pen × date · {_daily_rows} rows. The source of "
+        f"truth for operational reporting and daily totals.</div></div>"
         f'<div style="margin-top:10px;">'
         f'<div style="font-size:10px;font-weight:700;letter-spacing:.08em;'
         f'text-transform:uppercase;color:{CORAL_DEEP};">Storm-window fact</div>'
         f'<div style="font-size:11.2px;line-height:1.45;color:{INK};margin-top:2px;">'
-        f"One row per pen × storm episode × date · {_storm_rows} rows / "
-        f"{_unique_pen_days} unique pen-days. For before/during/after comparisons."
+        f"One row per pen × storm episode × date · {_storm_rows} rows"
+        f"For before/during/after comparisons."
         f"</div></div>"
         f'<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:11px;">'
         + "".join(
@@ -2006,12 +2005,11 @@ def slide_architecture(analysis, mart_counts, test_counts):
         + "</div>"
         f'<div style="font-size:11.0px;line-height:1.45;color:{MUTED};margin-top:8px;">'
         f"Shared dimensions keep filters consistent; the facts are never joined "
-        f"directly. Storm exposure is site-level and repeated per pen — never "
-        f"allocated to individual pens.</div>"
+        f"directly.</div> "
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
         f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
-        f"Overall totals come from the daily fact; event comparisons from the "
-        f"window fact.</div></div>"
+        f"Overall totals come from the daily activity fact; before/after comparisons from the "
+        f"storm episode fact.</div></div>"
         # 3 - tests
         f'<div style="background:{WHITE};border:1px solid {BORDER};'
         f"border-top:4px solid {CORAL};border-radius:9px;padding:13px 15px 11px 15px;"
@@ -2032,15 +2030,12 @@ def slide_architecture(analysis, mart_counts, test_counts):
         f"{example_rows}"
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
         f'font-size:10.4px;line-height:1.4;color:{MUTED};">'
-        f"The SQL is the implementation; the tests are the guarantee.</div></div></div>"
+        f"Tests not to validate volume of data but assumptions.</div></div></div>"
         f'<div style="margin-top:auto;padding-top:9px;border-top:1px solid {BORDER};'
         f"display:flex;justify-content:space-between;align-items:center;"
         f'font-size:10.0px;color:{MUTED};">'
         f"<span>{_total} models · {_staging} staging · {_intermediate} intermediate · "
-        f"{_marts} marts · built and tested on DuckDB · the same marts land in "
-        f'<b style="color:{INK};">Snowflake (ANALYTICS.MARTS)</b> in production</span>'
-        f'<span style="font-family:{MONO};font-size:9.5px;">'
-        f"docs/production_portability.md</span></div>"
+        f"{_marts} marts · built and tested on DuckDB </span>"
         f"</div>"
     )
 
@@ -2236,7 +2231,7 @@ def slide_lineage():
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('06 / Traceability', 'Data lineage', 'From source data to analytical outputs — through the layered dbt architecture: staging, intermediate and marts.', title_size=36, lead_size=15.5)}"
+        f"{header('06 / Traceability', 'Data lineage', 'From source data to analytical outputs.', title_size=36, lead_size=15.5)}"
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:9px;'
         f'padding:13px 15px;box-sizing:border-box;">'
         f'<div style="display:grid;grid-template-columns:298px 24px minmax(0,1fr) 24px 358px;'
@@ -2468,7 +2463,7 @@ def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 10px 6px;">'
-        f"{header('07 / What the data shows', 'Storm exposure coincided with lower uptime and detection activity — but patterns differed by pen.', 'P101 and P102 provide the more informative evidence while operating; P103 is shown for completeness, but its during-period rate rests on one operating day.')}"
+        f"{header('07 / What the data shows', 'Storm exposure coincided with lower uptime and detection activity.', 'P101 and P102 provide more informative evidence while operating. P103 is shown for completeness but has limited data.')}"
         f'<div style="display:flex;gap:16px;align-items:baseline;margin:2px 2px 0 2px;'
         f'font-size:9px;color:{MUTED};">'
         f'<span><b style="color:{NAVY};">P101 · P102</b> primary evidence</span>'
@@ -2492,8 +2487,7 @@ def slide_findings(s01, s01_metrics, baseline_ranges, s02_summary):
         f'<div style="display:flex;gap:0;flex:1;">{caveat_html}</div></div>'
         f'<div style="margin-top:auto;padding-top:7px;border-top:1px solid {BORDER};'
         f'display:flex;justify-content:space-between;font-size:9.2px;color:{MUTED};">'
-        f"<span>Rates are totals over each period, not an average of daily rates.</span>"
-        f"<span>Uptime is reported on-time, not proof the laser was armed.</span></div>"
+        f"<span>Rates are totals over each period, not an average of daily rates.</span></div>"
         f"</div>"
     )
 
@@ -2738,7 +2732,7 @@ def slide_dashboard(
     value_row = (
         f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">'
         f"{_value_card('What Kari can learn', TEAL, _learn)}"
-        f"{_value_card('Decisions it supports', OCEAN, _decisions, note='Every chart is populated from the marts; there are no placeholder visuals.')}"
+        f"{_value_card('Decisions it supports', OCEAN, _decisions)}"
         f"</div>"
     )
     mo.vstack(
@@ -2846,9 +2840,9 @@ def slide_closing(test_counts, fish_logs):
     limitations = [
         (
             "01",
-            "Source assumptions",
-            "Timezone and inferred reporting-day boundaries: every log and activity date is assumed Europe/Oslo.",
-            "Add a site→timezone lookup; confirm reporting-day semantics.",
+            "Semantic layer & knowledge graph",
+            "Incorporate a semantic layer and knowledge graph: End users can easily write text-to-SQL queries.",
+            "Design and validate text-to-SQL access against the reporting marts.",
         ),
         (
             "02",
@@ -2880,7 +2874,7 @@ def slide_closing(test_counts, fish_logs):
     mo.Html(
         f'<div style="min-height:650px;display:flex;flex-direction:column;'
         f'box-sizing:border-box;padding:8px 6px 8px 6px;">'
-        f"{header('09 / Closing', 'The model is tested. Its assumptions are explicit.', 'Here is what has been validated, what still constrains the conclusions, and what it takes to trust this in production.')}"
+        f"{header('09 / Closing', 'Validation & Next Steps', 'Here is what has been validated, what still constrains the conclusions, and what it takes to trust this in production.')}"
         # Validated
         f'<div style="display:flex;justify-content:space-between;align-items:baseline;">'
         f'<div style="font-size:10px;font-weight:700;letter-spacing:.13em;'
@@ -2904,7 +2898,7 @@ def slide_closing(test_counts, fish_logs):
         f"{_data} generic/singular tests check the actual model data; "
         f"{_unit} unit tests pin controlled edge cases.</div>"
         f'<div style="font-size:10px;color:{CORAL_DEEP};margin-top:3px;">'
-        f"The warn is deliberate: a flagged anomaly, not a failure.</div></div>"
+        f"The warn is deliberate: a flagged anomaly (high fish population).</div></div>"
         f'<div style="background:{WHITE};border:1px solid {BORDER};border-radius:9px;'
         f'padding:9px 13px;">'
         f'<div style="font-size:9.5px;font-weight:700;letter-spacing:.1em;'
