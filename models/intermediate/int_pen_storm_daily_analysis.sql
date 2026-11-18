@@ -9,10 +9,19 @@
 -- are excluded from the whole window. Within the window the pen still
 -- appears only on dates where it had assigned nodes (historical
 -- assignments respected). All joins are 1:1 at their grain - no fan-out.
--- storm_minutes/storm_event_count are actual site-day exposure (0 when
--- storm-free), independent of the classification.
--- Rates (shots/detections per operating hour, shots per detection) are
--- null when their denominators are zero or missing.
+-- This is the single daily feeder for fct_pen_storm_window_day.
+--
+-- Additivity and exposure grain:
+--   - expected_node_days / reported_node_days / expected_node_minutes /
+--     laser_shot_count / lice_detection_count / uptime_minutes are
+--     pen-day values; they can be summed within one episode, but a
+--     pen-day can appear in more than one episode window.
+--   - has_storm / storm_count / storm_minutes / max_storm_severity are
+--     SITE-day values repeated for every pen at the site that day. They
+--     are not additive across pens (the same storm exposure would be
+--     double-counted). Storm events are registered per site, so there is
+--     no basis for allocating exposure to individual pens.
+--   - Derived rates/completeness are ratios, never additive.
 -- Descriptive only - no causal claim.
 
 with
@@ -83,11 +92,19 @@ final as (
             episode_days.episode_start_date,
             episode_days.activity_date
         ) as days_from_episode_start,
+        coalesce(site_storm_days.has_storm, false) as has_storm,
+        coalesce(site_storm_days.storm_count, 0) as storm_count,
         coalesce(site_storm_days.total_storm_minutes, 0) as storm_minutes,
-        coalesce(site_storm_days.storm_count, 0) as storm_event_count,
+        site_storm_days.max_storm_severity,
+        pen_activity.day_duration_minutes,
+        pen_activity.expected_node_days,
+        pen_activity.reported_node_days,
+        pen_activity.expected_node_minutes,
+        pen_activity.has_reported_activity,
         pen_activity.laser_shot_count,
         pen_activity.lice_detection_count,
         pen_activity.uptime_minutes,
+        pen_activity.uptime_pct,
         pen_activity.shots_per_operating_hour,
         pen_activity.detections_per_operating_hour,
         pen_activity.shots_per_detection,

@@ -1,17 +1,6 @@
--- Grain: one row per globally unique pen (collected from assignments and
--- farmer logs so every fact foreign key resolves).
---
--- Pen-site caution: site_id / site_key are the pen's CURRENT site (latest
--- assignment) - current-state attributes only. Historical site attribution
--- lives per-day in the fact tables (site_key on every fact row), never
--- flattened onto the pen's whole history. current_node_ids lists the
--- nodes currently assigned to the pen; has_node_changes flags pens that
--- hosted more than one node over their history (e.g. P103: N03 then N05).
---
--- Pens seen only in farmer logs (no assignment) have null site and node
--- attributes. No descriptive pen attributes exist in the source; none
--- are invented. No Type 2 history: the only historically varying pen
--- properties are its site and nodes, both captured per day in the facts.
+-- Grain: one row per pen (assignments ∪ farmer logs).
+-- site_id/site_key are CURRENT-state only; historical site attribution is per day in the facts.
+-- current_node_ids/has_node_changes describe the node history. No Type 2 history.
 
 with
 

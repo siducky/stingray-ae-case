@@ -1,14 +1,5 @@
--- One row per local calendar date. Power BI / analyst-facing date
--- dimension built on int_dates.
---
--- date_key is a compact sortable integer (YYYYMMDD) - the classic
--- warehouse date key - rather than an md5 surrogate. Calendar
--- attributes are rich enough that consumers never need date functions:
--- group by year_month, week_start_date, weekday_name etc.
---
--- day_duration_minutes and is_dst_transition_day come from the
--- DST-aware int_dates spine, so uptime-style measures can be
--- interpreted correctly on 23h/25h Oslo days.
+-- Grain: one row per local calendar date (DST-aware, from int_dates).
+-- date_key is YYYYMMDD; day_duration_minutes is 1380/1440/1500.
 
 with
 

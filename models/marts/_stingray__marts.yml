@@ -200,10 +200,18 @@ models:
   - name: fct_pen_daily_activity
     description: >
       GRAIN: one row per site, pen and calendar date. Daily operational fact: pen-level node
-      activity with reporting completeness and the selected fish-count snapshot. Missing telemetry
-      is null, never zero. Natural ids (site_id, pen_id, activity_date) are retained so the table
-      reads without joins. This is the additive pen-day source of truth - prefer it over
-      fct_pen_storm_analysis for pen-day totals.
+      activity with the shared core metrics and the selected fish-count snapshot. Missing telemetry
+      is null, never zero; has_reported_activity separates missing from a reported zero. Natural ids
+      (site_id, pen_id, activity_date) are retained so the table reads without joins. This is the
+      additive pen-day source of truth - prefer it over fct_pen_storm_window_day for pen-day totals.
+      Core metrics, identical in both facts: expected_node_minutes = expected_node_days ×
+      day_duration_minutes; uptime_pct = uptime_minutes / expected_node_minutes × 100;
+      reporting_completeness = reported_node_days / expected_node_days; shots_per_operating_hour
+      and detections_per_operating_hour = count / uptime hours; shots_per_detection = shots /
+      detections. Additive: expected_node_days, reported_node_days, expected_node_minutes,
+      laser_shot_count, lice_detection_count, uptime_minutes. Semi-additive: fish_count (a snapshot
+      - never sum across dates). Site-day values repeated per pen, NOT additive across pens:
+      has_storm, storm_count, storm_minutes, max_storm_severity. Ratios/flags are never additive.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
@@ -227,6 +235,22 @@ models:
           description: Node-minutes cannot exceed node-days x the longest local day (DST-aware ceiling).
           arguments:
             expression: "uptime_minutes <= expected_node_days * 1500"
+      - dbt_utils.expression_is_true:
+          name: assert_expected_node_minutes_matches_node_days_and_day_length
+          arguments:
+            expression: "expected_node_minutes = expected_node_days * day_duration_minutes"
+      - dbt_utils.expression_is_true:
+          name: assert_uptime_pct_null_iff_uptime_missing
+          arguments:
+            expression: "(uptime_minutes is null) = (uptime_pct is null)"
+      - dbt_utils.expression_is_true:
+          name: assert_has_reported_activity_matches_reported_node_days
+          arguments:
+            expression: "has_reported_activity = (reported_node_days > 0)"
+      - dbt_utils.expression_is_true:
+          name: assert_has_storm_matches_storm_count
+          arguments:
+            expression: "has_storm = (storm_count > 0)"
     columns:
       - name: pen_day_id
         description: Primary key, surrogate hash of site_id, pen_id and activity_date.
@@ -264,6 +288,14 @@ models:
       - name: activity_date
         description: Natural key retained for readability.
         data_tests: [not_null]
+      - name: day_duration_minutes
+        description: True local day length (1380 / 1440 / 1500 minutes), from the DST-aware date spine.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1380
+                max_value: 1500
       - name: expected_node_days
         description: Nodes assigned to the pen on the date.
         data_tests:
@@ -278,8 +310,18 @@ models:
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
+      - name: expected_node_minutes
+        description: expected_node_days × day_duration_minutes (DST-aware expected operating minutes).
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+      - name: has_reported_activity
+        description: True when at least one assigned node reported. False means missing telemetry, not zero activity.
+        data_tests: [not_null]
       - name: reporting_completeness
-        description: Share of assigned nodes that reported (reported / expected).
+        description: reported_node_days / expected_node_days, rounded to 3 decimals. 0 when no node reported.
         data_tests:
           - not_null
           - dbt_utils.accepted_range:
@@ -310,6 +352,13 @@ models:
         description: Lice detected, summed over reporting nodes; null when no node reported.
       - name: uptime_minutes
         description: Operational minutes, summed over reporting nodes; null when no node reported.
+      - name: uptime_pct
+        description: uptime_minutes / expected_node_minutes × 100, rounded to 3 decimals; null when uptime is missing, 0 when reported uptime is genuinely zero.
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
       - name: has_node_set_change
         description: True when the assigned node set changed vs the previous available pen-day.
         data_tests: [not_null]
@@ -354,20 +403,68 @@ models:
       - name: max_storm_severity
         description: Highest storm severity at the site that day; null on storm-free days.
 
-  - name: fct_pen_storm_analysis
+  - name: fct_pen_storm_window_day
     description: >
-      GRAIN: one row per pen, storm episode and analytical date (before/during/after window).
-      Daily storm-impact fact: period classification, actual storm exposure, pen activity rates
-      and the fish-count snapshot. The pen-episode baseline comparison lives in
-      fct_pen_storm_baseline (join on storm_episode_key + pen_key). ADDITIVITY: storm_minutes is
-      site-day exposure repeated per pen (not additive across pens); activity measures duplicate
-      fct_pen_daily_activity at episode-window grain (a pen-day can appear in two episodes'
-      windows - do not sum here for pen-day totals). Natural ids retained for readability.
-      Descriptive only - no causal claim.
+      GRAIN: one row per pen, storm episode and analytical date in the before/during/after window.
+      Daily storm-impact fact: period classification and pen activity with the same core metric
+      definitions as fct_pen_daily_activity. Before/during/after comparisons are made by aggregating
+      these daily rows; there is no separate pen-episode baseline fact. Fish counts are NOT
+      duplicated here - join fct_pen_daily_activity on pen_id + activity_date for fish_count /
+      has_fish_count and its source-log lineage. ADDITIVITY: within one episode, expected_node_days,
+      reported_node_days, expected_node_minutes, laser_shot_count, lice_detection_count and
+      uptime_minutes are additive across pen-days. A pen-day can appear in more than one episode's
+      window, so do not sum activity measures across episodes (pen-day totals belong in
+      fct_pen_daily_activity). has_storm, storm_count, storm_minutes and max_storm_severity are
+      SITE-day values repeated per pen and are NOT additive across pens: storm events are
+      registered per site, so summing across pens double-counts the same exposure. Core metrics,
+      identical in both facts: expected_node_minutes = expected_node_days × day_duration_minutes;
+      uptime_pct = uptime_minutes / expected_node_minutes × 100; reporting_completeness =
+      reported_node_days / expected_node_days; shots_per_operating_hour and
+      detections_per_operating_hour = count / uptime hours; shots_per_detection = shots /
+      detections. Descriptive only - no causal claim.
     data_tests:
       - dbt_utils.unique_combination_of_columns:
           arguments:
             combination_of_columns: [storm_episode_key, pen_id, activity_date]
+      - dbt_utils.expression_is_true:
+          name: assert_zero_or_missing_uptime_has_no_rate
+          description: A zero-uptime or missing-uptime day never yields an artificial rate.
+          arguments:
+            expression: >
+              (uptime_minutes is null or uptime_minutes <= 0)
+              or (shots_per_operating_hour is not null and detections_per_operating_hour is not null)
+      - dbt_utils.expression_is_true:
+          name: assert_zero_or_missing_detections_have_no_shots_per_detection
+          description: Shots per detection is null exactly when detections are zero or missing.
+          arguments:
+            expression: >
+              (lice_detection_count is null or lice_detection_count <= 0)
+              or shots_per_detection is not null
+      - dbt_utils.expression_is_true:
+          name: assert_no_shots_without_reported_activity
+          arguments:
+            expression: "(laser_shot_count is null) = (reporting_completeness = 0)"
+      - dbt_utils.expression_is_true:
+          name: assert_pen_day_uptime_fits_node_days
+          description: Node-minutes cannot exceed node-days x the longest local day (DST-aware ceiling).
+          arguments:
+            expression: "uptime_minutes <= expected_node_days * 1500"
+      - dbt_utils.expression_is_true:
+          name: assert_expected_node_minutes_matches_node_days_and_day_length
+          arguments:
+            expression: "expected_node_minutes = expected_node_days * day_duration_minutes"
+      - dbt_utils.expression_is_true:
+          name: assert_uptime_pct_null_iff_uptime_missing
+          arguments:
+            expression: "(uptime_minutes is null) = (uptime_pct is null)"
+      - dbt_utils.expression_is_true:
+          name: assert_has_reported_activity_matches_reported_node_days
+          arguments:
+            expression: "has_reported_activity = (reported_node_days > 0)"
+      - dbt_utils.expression_is_true:
+          name: assert_has_storm_matches_storm_count
+          arguments:
+            expression: "has_storm = (storm_count > 0)"
     columns:
       - name: pen_storm_day_id
         description: Primary key, surrogate hash of storm_episode_id, pen_id and activity_date.
@@ -423,26 +520,59 @@ models:
       - name: days_from_episode_start
         description: Calendar days from episode_start_date (0 on the first during day; negative before).
         data_tests: [not_null]
-      - name: storm_minutes
-        description: Actual site-day storm exposure minutes (NOT additive across pens).
+      - name: day_duration_minutes
+        description: True local day length (1380 / 1440 / 1500 minutes), from the DST-aware date spine.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1380
+                max_value: 1500
+      - name: expected_node_days
+        description: Nodes assigned to the pen on the date.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+      - name: reported_node_days
+        description: Assigned nodes with an activity record on the date.
         data_tests:
           - not_null
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
-      - name: storm_event_count
-        description: Storm events exposing the site that day (NOT additive across pens).
+      - name: expected_node_minutes
+        description: expected_node_days × day_duration_minutes (DST-aware expected operating minutes).
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+      - name: has_reported_activity
+        description: True when at least one assigned node reported. False means missing telemetry, not zero activity.
+        data_tests: [not_null]
+      - name: reporting_completeness
+        description: reported_node_days / expected_node_days, rounded to 3 decimals. 0 when no node reported.
         data_tests:
           - not_null
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
+                max_value: 1
       - name: laser_shot_count
-        description: Pen-day laser shots (episode-window copy of fct_pen_daily_activity; do not sum across episodes).
+        description: Pen-day laser shots; null when no node reported. Additive within one episode; do not sum across episodes.
       - name: lice_detection_count
-        description: Pen-day lice detections (episode-window copy of fct_pen_daily_activity).
+        description: Pen-day lice detections; null when no node reported. Additive within one episode; do not sum across episodes.
       - name: uptime_minutes
-        description: Pen-day uptime minutes (episode-window copy of fct_pen_daily_activity).
+        description: Pen-day uptime minutes; null when no node reported. Additive within one episode; do not sum across episodes.
+      - name: uptime_pct
+        description: uptime_minutes / expected_node_minutes × 100, rounded to 3 decimals; null when uptime is missing, 0 when reported uptime is genuinely zero.
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
       - name: shots_per_operating_hour
         description: Laser shots per hour of uptime; null when uptime is zero or missing.
         data_tests:
@@ -461,193 +591,32 @@ models:
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
-      - name: reporting_completeness
-        description: Share of assigned nodes that reported on the date.
+      - name: has_storm
+        description: True when the site had storm exposure on the date (site-day value, repeated per pen - not additive across pens).
+        data_tests: [not_null]
+      - name: storm_count
+        description: Storm events exposing the site that day (site-day value, repeated per pen - not additive across pens).
         data_tests:
           - not_null
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
-                max_value: 1
-      - name: fish_count
-        description: Fish-count snapshot as of the date (duplicate of fct_pen_daily_activity for single-table analysis).
+      - name: storm_minutes
+        description: Site-day storm exposure minutes (site-day value, repeated per pen - not additive across pens).
         data_tests:
+          - not_null
           - dbt_utils.accepted_range:
               arguments:
                 min_value: 0
-                inclusive: false
-      - name: has_fish_count
-        description: True when a fresh, plausible snapshot backs the date.
-      - name: fish_count_log_id
-        description: Source farmer log entry the snapshot was selected from.
-      - name: fish_count_age_days
-        description: Age in days of the selected source log entry.
+      - name: max_storm_severity
+        description: Highest storm severity at the site that day; null on storm-free days.
         data_tests:
-          - dbt_utils.accepted_range:
+          - accepted_values:
               arguments:
-                min_value: 0
-      - name: fish_count_log_comment
-        description: Free-text comment from the selected source log entry.
+                values: ['low', 'moderate', 'high']
       - name: node_ids
         description: Comma-separated, sorted list of node_ids assigned to the pen on the date.
         data_tests: [not_null]
       - name: has_node_set_change
         description: True when the assigned node set changed vs the previous available pen-day.
         data_tests: [not_null]
-
-  - name: fct_pen_storm_baseline
-    description: >
-      GRAIN: one row per pen and storm episode. Pen-episode baseline comparison: before/during/
-      after totals, rates and reporting completeness. Grain-matched partner of fct_pen_storm_analysis
-      (join on storm_episode_key + pen_key, one row per pen-episode - no fan-out). Rates are
-      total / total over each period, null when the denominator is zero or missing; completeness is
-      the unweighted mean of daily values. One row per pen-episode: never sum across rows.
-      Descriptive only - no causal claim.
-    data_tests:
-      - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns: [storm_episode_key, pen_id]
-      - dbt_utils.expression_is_true:
-          name: assert_baseline_rate_null_iff_no_positive_uptime
-          arguments:
-            expression: >
-              (baseline_uptime_minutes is null or baseline_uptime_minutes <= 0 or baseline_shots is null)
-              or baseline_shots_per_operating_hour is not null
-      - dbt_utils.expression_is_true:
-          name: assert_during_pct_null_without_usable_baseline
-          description: Percentage change is null exactly when the baseline rate is zero/unavailable or the during rate is unavailable.
-          arguments:
-            expression: >
-              (baseline_shots_per_operating_hour is null or baseline_shots_per_operating_hour = 0
-                or during_shots_per_operating_hour is null)
-              or during_change_vs_baseline_pct is not null
-      - dbt_utils.expression_is_true:
-          name: assert_after_pct_null_without_usable_baseline
-          arguments:
-            expression: >
-              (baseline_shots_per_operating_hour is null or baseline_shots_per_operating_hour = 0
-                or after_shots_per_operating_hour is null)
-              or after_change_vs_baseline_pct is not null
-    columns:
-      - name: storm_pen_baseline_id
-        description: Primary key, surrogate hash of storm_episode_id and pen_id.
-        data_tests: [unique, not_null]
-      - name: storm_episode_key
-        description: FK to dim_storm_episode.
-        data_tests:
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('dim_storm_episode')
-                field: storm_episode_key
-      - name: site_key
-        description: FK to dim_site.
-        data_tests:
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('dim_site')
-                field: site_key
-      - name: pen_key
-        description: FK to dim_pen.
-        data_tests:
-          - not_null
-          - relationships:
-              arguments:
-                to: ref('dim_pen')
-                field: pen_key
-      - name: site_id
-        description: Natural key retained for readability.
-        data_tests: [not_null]
-      - name: pen_id
-        description: Natural key retained for readability.
-        data_tests: [not_null]
-      - name: baseline_days
-        description: Number of before-period pen-days included.
-        data_tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              arguments:
-                min_value: 0
-      - name: during_days
-        description: Number of during-period pen-days included.
-        data_tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              arguments:
-                min_value: 0
-      - name: after_days
-        description: Number of after-period pen-days included.
-        data_tests:
-          - not_null
-          - dbt_utils.accepted_range:
-              arguments:
-                min_value: 0
-      - name: has_node_change_in_window
-        description: True when the pen's node set changed on any day of the analytical window - discount such comparisons.
-        data_tests: [not_null]
-      - name: baseline_reporting_completeness
-        description: Unweighted mean of daily reporting_completeness over the before period.
-        data_tests:
-          - dbt_utils.accepted_range:
-              arguments:
-                min_value: 0
-                max_value: 1
-      - name: baseline_shots
-        description: Total laser shots over the before period; null when every day was missing.
-      - name: baseline_uptime_minutes
-        description: Total uptime minutes over the before period; null when every day was missing.
-      - name: baseline_detections
-        description: Total lice detections over the before period; null when every day was missing.
-      - name: baseline_shots_per_operating_hour
-        description: baseline_shots / baseline_uptime_minutes * 60; null when uptime is zero or missing.
-      - name: baseline_detections_per_operating_hour
-        description: baseline_detections / baseline_uptime_minutes * 60; null when uptime is zero or missing.
-      - name: baseline_shots_per_detection
-        description: baseline_shots / baseline_detections; null when detections are zero or missing.
-      - name: during_reporting_completeness
-        description: Unweighted mean of daily reporting_completeness over the during period.
-        data_tests:
-          - dbt_utils.accepted_range:
-              arguments:
-                min_value: 0
-                max_value: 1
-      - name: during_shots
-        description: Total laser shots over the during period; null when every day was missing.
-      - name: during_uptime_minutes
-        description: Total uptime minutes over the during period; null when every day was missing.
-      - name: during_detections
-        description: Total lice detections over the during period; null when every day was missing.
-      - name: during_shots_per_operating_hour
-        description: during_shots / during_uptime_minutes * 60; null when uptime is zero or missing.
-      - name: during_detections_per_operating_hour
-        description: during_detections / during_uptime_minutes * 60; null when uptime is zero or missing.
-      - name: during_shots_per_detection
-        description: during_shots / during_detections; null when detections are zero or missing.
-      - name: after_reporting_completeness
-        description: Unweighted mean of daily reporting_completeness over the after period.
-        data_tests:
-          - dbt_utils.accepted_range:
-              arguments:
-                min_value: 0
-                max_value: 1
-      - name: after_shots
-        description: Total laser shots over the after period; null when every day was missing.
-      - name: after_uptime_minutes
-        description: Total uptime minutes over the after period; null when every day was missing.
-      - name: after_detections
-        description: Total lice detections over the after period; null when every day was missing.
-      - name: after_shots_per_operating_hour
-        description: after_shots / after_uptime_minutes * 60; null when uptime is zero or missing.
-      - name: after_detections_per_operating_hour
-        description: after_detections / after_uptime_minutes * 60; null when uptime is zero or missing.
-      - name: after_shots_per_detection
-        description: after_shots / after_detections; null when detections are zero or missing.
-      - name: during_change_vs_baseline_pct
-        description: Percentage change of the during shots rate vs baseline; null when the baseline rate is zero/unavailable.
-      - name: after_change_vs_baseline_pct
-        description: Percentage change of the after shots rate vs baseline; null when the baseline rate is zero/unavailable.
-      - name: during_detections_change_vs_baseline_pct
-        description: Percentage change of the during detection rate vs baseline; null when the baseline rate is zero/unavailable.
-      - name: after_detections_change_vs_baseline_pct
-        description: Percentage change of the after detection rate vs baseline; null when the baseline rate is zero/unavailable.

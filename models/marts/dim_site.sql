@@ -1,13 +1,5 @@
--- One row per farm site.
---
--- The source data carries exactly one site attribute: site_id. No
--- names, locations or metadata are invented. first/latest assignment
--- dates are derived from the assignment history - the only other
--- site-level facts the sources offer.
---
--- Sites are collected from assignments AND storm events so every
--- fact foreign key resolves even if a storm references a site with no
--- node assignments (dates are null for such sites).
+-- Grain: one row per site (assignments ∪ storms).
+-- Only source attribute is site_id; assignment dates are derived. Null dates = storm-only site.
 
 with
 

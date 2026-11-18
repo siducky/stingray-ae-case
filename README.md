@@ -1,284 +1,369 @@
-# Stingray Case Study — dbt Analytics Engineering
+# Stingray Case Study — Analytics Engineer Interview
 
-Local DuckDB warehouse (`data/warehouse/stingray.duckdb`) built with dbt from the raw extracts in
-`data/raw/`. Layered staging → intermediate → marts. See `docs/limitations.md` and
-`docs/production_portability.md` for scope decisions and porting notes.
+An end-to-end analytics engineering project that transforms operational data from underwater laser nodes into reliable, analysis-ready datasets for monitoring sea-lice detection and laser activity across salmon pens.
 
-Run everything through `uv run` (the project virtualenv is managed by uv).
+Built with **dbt Core, DuckDB, Marimo and Python**, the project demonstrates how raw operational data can be transformed into well-defined analytical models through reusable transformations, temporal data modelling, data-quality validation and tested business logic.
 
-## Repository structure
+## Business context
 
+Stingray operates underwater laser nodes that detect and remove sea lice in salmon pens. Understanding how environmental conditions, particularly storms, affect equipment availability and laser activity is important for monitoring performance and supporting operational decisions.
+
+This project brings together four data sources:
+
+- **Node activity:** Daily lice detections, laser shots and equipment uptime.
+- **Node assignments:** Effective-dated relationships between nodes, sites and pens.
+- **Storm events:** Site-level storm intervals and severity.
+- **Farmer logs:** Manually reported fish counts for individual pens.
+
+The objective is to create a consistent analytical foundation that allows users to compare operational activity across pens and sites, investigate changes around storm events, and assess the completeness of the underlying data.
+
+## Key deliverables
+
+- **Layered dbt pipeline:** Source-aligned staging, reusable intermediate transformations and reporting marts.
+- **Dimensional data model:** Separate fact tables for daily operational monitoring and storm-event analysis.
+- **Business metrics:** Consistent definitions for equipment uptime, detection activity and laser firing rates.
+- **Data-quality framework:** Tests for model grain, temporal validity, missing telemetry, fish-count plausibility and calculation logic.
+- **Traceable transformations:** Documented model dependencies and lineage from source data to reporting outputs.
+- **Analytical presentation:** A Marimo-based case presentation with findings and a Power BI dashboard concept.
+
+## Architecture
+
+The project follows a layered architecture that separates source preparation, business logic and analytical outputs.
+
+```mermaid
+flowchart LR
+    A["Raw CSV sources"] --> B["Staging"]
+    B --> C["Intermediate"]
+    C --> D["Marts"]
+    D --> E["Analytics & BI"]
+
+    A --- A1["Node activity<br/>Node assignments<br/>Storm events<br/>Farmer logs"]
+    B --- B1["Source-aligned<br/>views and casts"]
+    C --- C1["Temporal joins<br/>Validation<br/>Daily aggregation<br/>Storm analysis"]
+    D --- D1["Fact tables<br/>Dimensions"]
+    E --- E1["Python / R<br/>Power BI<br/>Marimo"]
 ```
-.
-├── data/
-│   ├── raw/                        # four source CSVs (read-only inputs)
-│   └── warehouse/                  # stingray.duckdb, built by dbt (generated)
-├── models/
-│   ├── staging/                    # sources.yml, 1:1 staging views, tests and docs
-│   ├── intermediate/               # business-logic views, YAML and unit tests
-│   └── marts/                      # dimensions and facts (tables), tests and docs
-├── notebooks/
-│   ├── 01_data_exploration.py      # EDA: raw CSVs exposed as DuckDB views
-│   ├── stingray_case_presentation.py  # 13-slide case deck (Marimo slides)
-│   ├── theme.css                   # deck palette, typography, section backgrounds
-│   └── layouts/                    # slides layout, speaker notes, deck settings
-├── docs/
-│   ├── diagrams/                   # Mermaid sources (.mmd) and rendered SVGs
-│   ├── limitations.md              # scope decisions and upgrade paths
-│   ├── production_portability.md   # DuckDB → Snowflake/Postgres notes
-│   └── stingray_case_presentation.pdf  # rendered deck handout (13 pages)
-├── tests/
-│   ├── staging/                    # singular tests on staging models
-│   └── intermediate/               # singular tests on intermediate models
-├── src/stingray_ae_case/           # installable Python package (uv project)
-├── dbt_packages/                   # installed dbt packages (generated)
-├── target/, logs/                  # dbt artifacts and logs (generated)
-├── dbt_project.yml                 # dbt config, vars, materialisations
-├── packages.yml                    # dbt package dependencies
-├── profiles.yml                    # local DuckDB connection
-├── pyproject.toml, uv.lock         # Python environment and dependencies
-└── README.md
-```
 
-Generated and git-ignored: `.venv/`, `data/warehouse/`, `data/raw/*` (only `.gitkeep` is
-tracked), `target/`, `logs/`, `dbt_packages/` and marimo's `__marimo__/` cache.
+### Transformation layers
+
+| Layer            | Responsibility                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Raw**          | Original source extracts, preserved as read-only inputs.                                                           |
+| **Staging**      | Source-aligned models that standardise names, data types and timestamps while retaining the original source grain. |
+| **Intermediate** | Business logic, temporal joins, data validation, date spines, aggregations and analytical calculations.            |
+| **Marts**        | Documented fact and dimension tables designed for reporting and downstream analysis.                               |
+| **Consumption**  | Analytical workflows and reporting tools, including Python, R and Power BI.                                        |
+
+The staging layer intentionally avoids business logic. Transformations that involve multiple sources or analytical assumptions are implemented in the intermediate layer, making the logic easier to test, reuse and maintain.
+
+## Data model and analytical outputs
+
+The reporting layer contains two fact tables, supported by shared dimensions.
+
+### Fact tables
+
+| Model                      | Grain                      | Purpose                                                                 |
+| -------------------------- | -------------------------- | ----------------------------------------------------------------------- |
+| `fct_pen_daily_activity`   | Site × pen × date          | Daily operational monitoring, trends and comparisons across pens.       |
+| `fct_pen_storm_window_day` | Pen × storm episode × date | Comparing operational activity before, during and after storm episodes. |
+
+### Dimensions
+
+| Model               | Purpose                                                  |
+| ------------------- | -------------------------------------------------------- |
+| `dim_date`          | Consistent calendar attributes and local-day boundaries. |
+| `dim_site`          | Site-level filtering and reporting.                      |
+| `dim_pen`           | Pen-level filtering and reporting.                       |
+| `dim_storm_episode` | Storm episode attributes for event-based analysis.       |
+
+The two fact tables represent different analytical questions and are not directly joined to one another. Shared dimensions provide consistent filtering, while storm-specific attributes are available through the storm episode dimension.
+
+### Core business metrics
+
+The same metric definitions are used across both reporting facts.
+
+| Metric                            | Definition                                   | Interpretation                                       |
+| --------------------------------- | -------------------------------------------- | ---------------------------------------------------- |
+| **Uptime %**                      | Uptime minutes / expected node minutes × 100 | Equipment availability.                              |
+| **Detections per operating hour** | Lice detections / uptime hours               | Detection activity while equipment is operating.     |
+| **Shots per operating hour**      | Laser shots / uptime hours                   | Laser firing activity while equipment is operating.  |
+| **Shots per detection**           | Laser shots / lice detections                | Relationship between firing activity and detections. |
+
+Rates are calculated from aggregated numerators and denominators rather than by averaging individual daily or node-level rates. Metrics return `NULL` when the relevant denominator is zero or unavailable.
+
+**Important modelling considerations:**
+
+- Missing telemetry is not interpreted as zero activity.
+- Expected operating time accounts for assigned nodes and daylight-saving changes.
+- Reporting completeness is exposed alongside operational metrics.
+- Uptime represents reported node-on time, not necessarily laser-ready time.
+- Fish counts are contextual information and are not used as denominators for the operational rates.
+- Storm-window rows can overlap across episodes. Their measures should not be summed across episodes to produce daily operational totals.
+
+## Data requirements
+
+The project expects four source CSV extracts:
+
+| Source                | Description                                                     |
+| --------------------- | --------------------------------------------------------------- |
+| `node_daily_activity` | Daily node-level operational measurements.                      |
+| `node_pen_assignment` | Effective-dated node, site and pen assignments.                 |
+| `storm_events`        | Site-level storm events with start/end timestamps and severity. |
+| `farmer_pen_log`      | Farmer-entered fish counts and associated log metadata.         |
+
+**Source data is not included in this repository.** The raw-data directory is excluded from version control. To run the pipeline, obtain the required extracts and place them in `data/raw/` using the filenames and schemas configured in the dbt source definitions.
+
+The pipeline treats these extracts as read-only inputs and does not modify the original files.
 
 ## Getting started
 
-```bash
-# 1. Install the environment (creates .venv from pyproject.toml + uv.lock)
-uv sync
+### Prerequisites
 
-# 2. Verify the dbt/DuckDB connection
+- Python (version 3.14)
+- [uv](https://docs.astral.sh/uv/)
+- Git
+- The four required source CSV extracts
+
+### Installation
+
+Clone the repository and install the project dependencies:
+
+```bash
+git clone https://github.com/siducky/stingray-ae-case.git
+cd <repository-directory>
+
+uv sync
+```
+
+### Configure the source data
+
+Place the four required CSV files in `data/raw/`.
+
+Check the source definitions in `models/staging/` to confirm the expected filenames and column structures.
+
+### Verify the connection and build the warehouse
+
+```bash
+# Verify the dbt profile and DuckDB connection
 uv run dbt debug --profiles-dir .
 
-# 3. Build all layers (staging -> intermediate -> marts) and run all tests
+# Build staging, intermediate and mart models
+# Run the associated tests
 uv run dbt build --profiles-dir .
 ```
 
-### Common commands
+The build creates the local DuckDB warehouse at:
+
+```text
+data/warehouse/stingray.duckdb
+```
+
+### Generate dbt documentation
 
 ```bash
-# Build or test a single layer / model
+uv run dbt docs generate --profiles-dir .
+uv run dbt docs serve --profiles-dir . --port 8080 --no-browser
+```
+
+Open `http://localhost:8080` to explore model documentation, dependencies and the dbt lineage graph.
+
+## Common commands
+
+All project commands are executed through `uv run`.
+
+### dbt
+
+```bash
+# Build individual layers
 uv run dbt build --select staging --profiles-dir .
 uv run dbt build --select intermediate --profiles-dir .
 uv run dbt build --select marts --profiles-dir .
+
+# Run a specific model
 uv run dbt run --select int_pen_daily_fish_count --profiles-dir .
 
-# Tests only
+# Execute tests only
 uv run dbt test --profiles-dir .
 
-# Generate and serve the docs + lineage graph (http://localhost:8080)
+# Generate documentation
 uv run dbt docs generate --profiles-dir .
-uv run dbt docs serve --profiles-dir . --port 8080 --no-browser
-
-# Lint / format Python and Marimo notebook files
-uv run ruff check --fix . && uv run ruff format .
-
-# Validate notebooks
-uv run marimo check notebooks/
-
-# Edit a notebook interactively
-uv run marimo edit notebooks/01_data_exploration.py
 ```
-
-The lineage graph is available in the served docs (left-hand "graph" icon, or the circular-nodes
-view) and statically in `target/manifest.json`.
 
 ### Configuration overrides
 
-Analytical thresholds are `vars` in `dbt_project.yml` (see the table below) and can be overridden
-per run:
+Analytical thresholds and reporting assumptions are configurable through variables in `dbt_project.yml`.
+
+For example:
 
 ```bash
 uv run dbt build --select intermediate --profiles-dir . \
   --vars '{fish_count_max_age_days: 14, storm_baseline_days: 5}'
 ```
 
-**Note:** the warehouse is a single DuckDB file — make sure no other tool (e.g. DBeaver) holds it
-open, or `dbt build` fails with a lock error.
+| Variable                   |       Default | Description                                                                                  |
+| -------------------------- | ------------: | -------------------------------------------------------------------------------------------- |
+| `site_timezone`            | `Europe/Oslo` | Timezone used for site-local calendar days and storm analysis.                               |
+| `fish_count_plausible_max` |     `1000000` | Upper plausibility threshold for reported fish counts.                                       |
+| `fish_count_max_age_days`  |           `7` | Maximum age of a fish-count snapshot before it is considered stale.                          |
+| `storm_episode_gap_hours`  |          `24` | Events at the same site merge into an episode when the gap is strictly below this threshold. |
+| `storm_baseline_days`      |           `3` | Number of local calendar days used for the pre-storm baseline.                               |
+| `storm_post_days`          |           `3` | Number of local calendar days used for the post-storm period.                                |
 
-## Presentation notebook (Marimo)
+The farmer-log timezone is separately configured as `Europe/Oslo` in staging.
 
-`notebooks/stingray_case_presentation.py` is a 13-slide deck for the case interview:
-stakeholder problem → data quality → methodology → dbt architecture → star schema and
-SQL → findings → Power BI specification → limitations. It queries the marts read-only,
-so every figure in the deck is live from the warehouse.
+### Python and Marimo
 
-| File | Purpose |
-|---|---|
-| `notebooks/stingray_case_presentation.py` | the deck: data-prep cells plus one cell per slide |
-| `notebooks/layouts/stingray_case_presentation.slides.json` | slides layout, slide types, speaker notes, deck settings |
-| `notebooks/theme.css` | palette/typography, navy section slides, teal progress bar |
-| `docs/stingray_case_presentation.pdf` | rendered handout (13 pages, 16:9) |
+```bash
+# Lint and format Python files
+uv run ruff check --fix .
+uv run ruff format .
 
-Paths in the app config are relative to the notebook, so keep `theme.css` and
-`layouts/` next to it if you move it. Prerequisite: `uv run dbt build --profiles-dir .`
-so `data/warehouse/stingray.duckdb` exists.
+# Validate notebooks
+uv run marimo check notebooks/
 
-### Present
+# Open the exploratory notebook
+uv run marimo edit notebooks/01_data_exploration.py
+
+# Open the presentation
+uv run marimo edit notebooks/stingray_case_presentation.py
+```
+
+## Data quality and testing
+
+Data quality is treated as part of the transformation process rather than as a final reporting check.
+
+The project combines dbt generic tests, singular SQL tests and unit tests to validate both structural integrity and business logic.
+
+### Testing strategy
+
+| Category                 | Examples                                                                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------- |
+| **Schema and integrity** | Not-null constraints, unique keys and referential integrity.                                            |
+| **Model grain**          | Uniqueness at node-day, pen-day, storm-day and episode-level grains.                                    |
+| **Temporal logic**       | Effective-dated assignments, storm exposure across local calendar days and daylight-saving transitions. |
+| **Business rules**       | Fish-count plausibility, snapshot freshness, missing telemetry and reporting completeness.              |
+| **Calculation logic**    | Expected operating minutes, uptime percentages, operating rates and denominator handling.               |
+| **Analytical windows**   | Before/during/after classification and protection against duplicate pen-days within an episode.         |
+
+### Examples of edge cases covered
+
+- A node changing pen assignment while its activity record is missing on the transition date.
+- A storm spanning multiple local calendar days, including daylight-saving-aware day boundaries.
+- Multiple farmer logs for the same pen and date, with deterministic selection of the latest entry.
+- Implausible fish-count entries being flagged rather than silently corrected.
+- Missing and zero-uptime records being treated differently.
+- Overlapping and nested storm intervals when identifying storm episodes.
+
+Run the full build and test suite with:
+
+```bash
+uv run dbt build --profiles-dir .
+```
+
+A successful build indicates that the configured models and associated tests completed without errors. Warning-level tests may still flag known source-data quality issues.
+
+## Presentation and analytical exploration
+
+The repository includes a Marimo-based presentation that demonstrates the analytical workflow and communicates the findings to a business stakeholder.
+
+`notebooks/stingray_case_presentation.py` contains the presentation, while the supporting layout and theme files define slide configuration, speaker notes and styling.
+
+The presentation queries the DuckDB marts read-only, so its reported figures are derived from the built warehouse.
+
+### Run the presentation
 
 ```bash
 uv run marimo edit notebooks/stingray_case_presentation.py
 ```
 
-Open the **app preview** (bottom-right) and pick **Slides** in the layout dropdown — the
-saved layout is loaded automatically from `layouts/`. Enter browser fullscreen, then press
-`F` for reveal fullscreen.
+Open the app preview and select **Slides** in the layout dropdown. The saved slide layout is loaded from the `notebooks/layouts/` directory.
 
-Keys while presenting: `←`/`→`/`Space` navigate · `S` speaker view (speaker notes) ·
-`C` toggle code · `Esc` slide overview · `F` fullscreen.
-
-Read-only app, with no editor UI:
+Alternatively, run the notebook without the editor interface:
 
 ```bash
 uv run marimo run notebooks/stingray_case_presentation.py
 ```
 
-The notebook opens DuckDB with `read_only=True`. Close it before `dbt build` — DuckDB
-allows readers or one writer, not both.
+The warehouse must be built before opening the presentation.
 
-### Export
-
-Static, self-contained HTML including outputs, layout, theme and speaker notes:
+### Export to HTML
 
 ```bash
-uv run marimo export html notebooks/stingray_case_presentation.py -o /tmp/stingray_deck.html
+uv run marimo export html \
+  notebooks/stingray_case_presentation.py \
+  -o /tmp/stingray_deck.html
 ```
 
-`docs/stingray_case_presentation.pdf` is the rendered handout (one slide per page, 16:9).
-It is produced from that HTML export with headless Chrome, so the custom theme and charts
-match the live deck. Marimo's native slides PDF
-(`uv run marimo export pdf notebooks/stingray_case_presentation.py -o deck.pdf --as=slides`)
-needs `nbconvert` and Playwright — not project dependencies — and renders through
-nbconvert rather than the deck HTML, so the navy section slides lose their CSS.
+The export produces a self-contained HTML presentation with the rendered outputs, layout and theme.
 
-### Edit and extend
+## Limitations and production considerations
 
-- Data loads/prep are `hide_code` cells; each slide is one cell that returns a `mo.vstack`.
-- Slide types, deck settings and speaker notes are edited in the slides config sidebar of
-  the app preview and saved back to `layouts/…slides.json`; slide order follows cell order
-  (drag slides in the minimap to reorder the underlying cells).
-- Adding or removing cells changes the number of layout entries; marimo warns when the
-  layout no longer matches the notebook. Re-save the layout from the preview after
-  structural edits.
-- Validate without opening a browser: `uv run marimo check notebooks/`.
+This project demonstrates production-oriented analytics engineering practices, but the current implementation is a local case-study environment rather than a deployed production pipeline.
+
+The following areas would need further work before operational deployment:
+
+| Area                       | Current implementation                                          | Potential production enhancement                                                       |
+| -------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Warehouse**              | Local DuckDB database                                           | Validate transformations and performance in the target Snowflake environment.          |
+| **Data freshness**         | Full local builds without source freshness monitoring           | Add source freshness checks, data contracts and alerting.                              |
+| **Reporting window**       | Source-driven reporting period based on observed activity dates | Introduce an explicit reporting end date to make end-of-period outages visible.        |
+| **Timezone handling**      | Single configured site timezone                                 | Introduce a site-to-timezone lookup if multiple timezones are required.                |
+| **Incremental processing** | Full-refresh models                                             | Evaluate incremental materialisations as data volume and processing requirements grow. |
+| **Storm exposure**         | Current source data contains no overlapping storm events        | Implement merged-interval exposure calculations if overlapping events occur.           |
+| **Operational monitoring** | Local execution and dbt tests                                   | Add scheduled orchestration, logging, monitoring and failure notifications.            |
+
+The before/during/after storm comparison is descriptive. It identifies changes in operational metrics around storm episodes but does not establish causality or control for confounding factors such as seasonality, biomass or changes in the node configuration.
+
+Additional device-status, maintenance and intraday telemetry data would be required to distinguish technical faults, deliberate shutdowns and telemetry gaps.
+
+Further implementation details and scope decisions are documented in:
+
+- [`docs/limitations.md`](docs/limitations.md) — assumptions, limitations and deliberate scope decisions.
+- [`docs/production_portability.md`](docs/production_portability.md) — DuckDB portability considerations for Snowflake and PostgreSQL.
+
+## Repository structure
+
+```text
+.
+├── data/
+│   ├── raw/                         # Source CSV extracts (not tracked)
+│   └── warehouse/                   # Generated DuckDB database
+├── models/
+│   ├── staging/                     # Source-aligned staging models
+│   ├── intermediate/                # Business logic and transformations
+│   └── marts/                       # Reporting facts and dimensions
+├── notebooks/
+│   ├── 01_data_exploration.py       # Exploratory data analysis
+│   ├── stingray_case_presentation.py # Marimo presentation
+│   ├── theme.css                    # Presentation styling
+│   └── layouts/                     # Slide layout and speaker notes
+├── docs/
+│   ├── diagrams/                    # Architecture and lineage diagrams
+│   ├── limitations.md               # Scope decisions and limitations
+│   └── production_portability.md    # Cross-warehouse portability notes
+├── tests/
+│   ├── staging/                     # Staging-level SQL tests
+│   └── intermediate/                 # Intermediate-level SQL tests
+├── src/stingray_ae_case/             # Python package
+├── dbt_project.yml
+├── packages.yml
+├── profiles.yml
+├── pyproject.toml
+├── uv.lock
+└── README.md
+```
+
+Generated artifacts such as `.venv/`, `target/`, `logs/`, `dbt_packages/` and `data/warehouse/` are excluded from version control.
 
 ## Diagrams
 
-Versioned Mermaid sources live in `docs/diagrams/`:
+The `docs/diagrams/` directory contains version-controlled Mermaid diagram sources:
 
-- `architecture.mmd` — layered architecture view (raw → staging → intermediate tracks → marts).
-- `dag.mmd` — model-to-model DAG generated from `target/manifest.json` (`parent_map`), so it
-  always matches what dbt actually resolved.
+- `architecture.mmd` — layered architecture from raw data to reporting marts.
+- `dag.mmd` — dbt model dependency graph generated from the manifest.
 
-Render them to SVG (`-b transparent` keeps the background clean for slides and docs). With
-`@mermaid-js/mermaid-cli` 12.x the width flag is `--size` (`-w` was removed):
+The Mermaid source files are the editable source of truth; rendered SVG and PNG files are generated outputs.
 
-```bash
-npx -y @mermaid-js/mermaid-cli@latest -i docs/diagrams/architecture.mmd \
-  -o docs/diagrams/architecture.svg -b transparent --size 2400
+---
 
-npx -y @mermaid-js/mermaid-cli@latest -i docs/diagrams/dag.mmd \
-  -o docs/diagrams/dag.svg -b transparent --size 3200
-```
-
-On Linux hosts that block the Chromium sandbox (e.g. Ubuntu 23.10+ with AppArmor user-namespace
-restrictions), add a puppeteer config such as `{"args": ["--no-sandbox"]}` via `-p <config.json>`.
-
-The `.mmd` files are the versioned source of truth; the generated `.svg`/`.png` files are build
-outputs. Regenerate `dag.mmd` after changing models (`uv run dbt docs generate --profiles-dir .`
-refreshes `target/manifest.json` first).
-
-## Intermediate models and grains
-
-| Model | Grain | Rows | Purpose |
-|---|---|---|---|
-| `int_dates` | one row per local calendar date (`date_day`) | 14 | Central DST-aware date spine (UTC day boundaries, true day duration 1380/1440/1500 min). Source-driven range: activity dates ∪ storm-touched local dates. |
-| `int_node_days_assigned` | one row per assigned node per calendar day (`node_id` × `activity_date`) | 63 | Attributes each node-day to the site/pen valid **on that date** (temporal assignment), keeps days without telemetry as null measures with `has_activity_record = false`. |
-| `int_storm_daily_exposure` | one row per storm event per local calendar day (`storm_id` × `storm_date`) | 6 | Splits half-open storm intervals `[start, end)` into Europe/Oslo days using `int_dates` boundaries. |
-| `int_site_daily_storm_summary` | one row per site per storm-affected day (`site_id` × `activity_date`) | 6 | Aggregates storm exposure to site-day so joining to pen activity never multiplies rows. `total_storm_minutes` is **cumulative event-minutes** — overlapping storms at one site would double-count shared time; no overlaps exist in the data and a warn test guards it. |
-| `int_pen_daily_activity` | one row per site, pen, day (`site_id` × `pen_id` × `activity_date`) | 63 | Aggregates node-days to pen-days: expected/reported node days, summed measures, node set, node-set-change flag, reporting completeness. |
-| `int_fish_counts_validated` | one row per farmer log entry (`log_id`) | 10 | Validation only: `is_fish_count_plausible`, `is_duplicate_pen_day`. Nothing removed or corrected. |
-| `int_pen_daily_fish_count` | one row per pen per day from the pen's first log through the reporting period end (`pen_id` × `activity_date`) | 70 | Daily snapshot: latest entry on or before the date (tie-break: highest `log_id`), carried forward only while younger than `fish_count_max_age_days`; implausible latest entries withhold the snapshot instead of silently substituting an older value. |
-| `int_storm_episodes` | one row per storm episode per site (`site_id` × `episode_started_at`) | 3 | Groups events at a site whose gap is strictly < `storm_episode_gap_hours` (24); gaps of exactly 24h start a new episode. Running-max gaps-and-islands (overlap/nesting safe). Episode span includes quiet gaps — never exposure. |
-| `int_pen_storm_daily_analysis` | one row per pen, episode and local date in the window (`storm_episode_id` × `pen_id` × `activity_date`) | 39 | Before (3 dates) / during (episode dates, partially affected included) / after (3 dates) classification with pen activity, actual site-day storm minutes and rates. Pens included only while assigned at the episode's site. |
-| `int_storm_pen_baselines` | one row per pen and episode (`storm_episode_id` × `pen_id`) | 5 | Before/during/after comparison: total shots / total uptime × 60 (never an average of daily rates), reporting completeness, percentage changes (null on zero/unavailable baselines). |
-
-### Reporting window (deterministic, no `CURRENT_DATE`)
-
-`int_node_days_assigned` and `int_pen_daily_fish_count` cover
-`min(activity_date) … max(activity_date)` observed in `stg_stingray__node_daily_activity`
-(currently 2026-10-01 … 2026-10-14). The window is purely source-driven with no override
-mechanism — see `docs/limitations.md` for the consequence.
-
-## Configuration (dbt_project.yml vars)
-
-| Var | Default | Meaning |
-|---|---|---|
-| `site_timezone` | `Europe/Oslo` | Zone for site-local calendar days (storm day-splitting, episode dates; matches the assumed `activity_date` boundary). |
-| `fish_count_plausible_max` | `1000000` | Entries above this are implausible: flagged in `int_fish_counts_validated`, never selected as snapshots (kept in staging). |
-| `fish_count_max_age_days` | `7` | Maximum age of a fish-count entry before it is no longer carried forward. |
-| `storm_episode_gap_hours` | `24` | Events at a site merge when the gap is strictly below this; a gap of exactly this starts a new episode. |
-| `storm_baseline_days` | `3` | Local dates of quiet weather before the episode start date (baseline period). |
-| `storm_post_days` | `3` | Local dates after the episode end date (post period). |
-
-`farmer_log_timezone` (staging) remains `Europe/Oslo`.
-
-## Data Quality Findings
-
-| Finding | Where | Handling |
-|---|---|---|
-| N05 has no activity record on 2026-10-08 (its move-day) | `int_node_days_assigned` | Retained as a spine row with null measures and `has_activity_record = false`; P103 2026-10-08 has `reporting_completeness = 0`. |
-| N04 has no activity record on 2026-10-12 | `int_node_days_assigned` | Same treatment; P201 2026-10-12 `reporting_completeness = 0`. |
-| P201 log 1014 on 2026-10-08 records 1,852,000 fish (10× the next largest count) | `int_fish_counts_validated` → `int_pen_daily_fish_count` | Flagged `implausible` in `int_fish_counts_validated` (`fish_count_plausible_max`), never selected. Because it is the LATEST entry for that pen, no older value is silently substituted: the snapshot is withheld from 2026-10-08 onward with the log id kept for traceability. The entry itself is preserved in staging and flagged by the pre-existing warn test. |
-| P102 has two entries on 2026-10-08 (08:16 and a 14:47 "corrected count") | `int_fish_counts_validated` → `int_pen_daily_fish_count` | Both flagged `duplicate` (legitimate correction). Latest entry wins (14:47, log 1013, 164,300); deterministic tie-break (highest timestamp, then highest log_id) covered by a unit test with an exact-timestamp tie. |
-| P103 has no farmer log after 2026-10-01 | `int_pen_daily_fish_count` | The 2026-10-01 snapshot is carried to 2026-10-08 (age 7), then withheld as stale from 2026-10-09. |
-| S02 storms ST-0042 (ends 2026-10-10 03:00Z) and ST-0043 (starts 2026-10-13 22:30Z) are ~3.8 days apart | `int_storm_episodes` | Gap exceeds `storm_episode_gap_hours` (24), so two separate episodes — never merged. |
-| No overlapping storm events per site | `int_site_daily_storm_summary`, `int_storm_episodes` | Verified by warn-level tests; keeps `total_storm_minutes` meaningful as cumulative event-minutes and episode exposure within the span. |
-| No overlapping assignment periods per node | staging test `assert_node_has_one_assignment_at_a_time` (gaps allowed) | Inherited guarantee the temporal join relies on; the intermediate grain test (`node_id` × `activity_date` unique) proves no node-day is attributed to multiple assignments. |
-
-## Tests
-
-`uv run dbt build --profiles-dir .` → **347 tests (336 generic/singular + 11 unit), 346 pass, 1 warn, 0 errors.**
-The single warn is the pre-existing staging plausibility check that flags P201's 1,852,000 entry
-(deliberate). By layer: 48 generic/singular tests on staging, 151 on intermediate, 137 on marts,
-plus the 11 unit tests on the temporal and fish-count edge cases.
-
-- Surrogate keys unique + not null on all ten models; grain uniqueness
-  (`node_id`×`activity_date`, `storm_id`×`storm_date`, `site_id`×`activity_date`,
-  `site_id`×`pen_id`×`activity_date`, `pen_id`×`activity_date`, `site_id`×`episode_started_at`,
-  `storm_episode_id`×`pen_id`×`activity_date`, `storm_episode_id`×`pen_id`, `log_id`, `date_day`).
-- `reported_node_days <= expected_node_days`; `reporting_completeness` in [0, 1];
-  `storm_minutes` > 0 and within the DST-aware local day length; `node_ids` list length equals
-  `expected_node_days`; missing activity is null, never zero; fish count present exactly when
-  fresh, never older than the age threshold, and never built from an implausible entry.
-- Episode guards: positive ranges, ordered dates, `storm_event_count >= 1`, severity values.
-- Analysis guards: window boundaries (before = −N..−1, during ≥ 0, after ≥ 1 from episode start),
-  no duplicated pen-day within an episode, zero/missing uptime never yields a rate.
-- Baseline guards: rates null exactly when uptime is zero/missing or shots unavailable; percentage
-  changes null exactly when the baseline rate is zero/unavailable.
-- Foreign keys: `assignment_id`, `storm_id`, `site_id` (warn), `fish_count_log_id`,
-  `storm_episode_id`.
-- Singular tests: date-spine continuity; storm minutes within the true (DST-aware) local day
-  length; episode exposure conservation (day-splitting preserves storm durations; quiet gaps never
-  become exposure); no snapshot from an implausible entry; no overlapping storms per site (warn).
-- Unit tests: N05 assignment transition with missing move-day telemetry; multi-day storm splitting
-  (ST-0041 → 300/1440/420 min) and a midnight-ending storm; storm episodes (23h gap merges,
-  exactly-24h gap splits, overlapping and nested intervals merge, different sites never merge);
-  fish-count latest-entry, correction, timestamp-tie, implausibility-without-substitution and
-  staleness rules; pen-day null preservation and completeness; before/during/after windows with a
-  partially affected first day, zero-uptime and missing-activity days; baseline rates, percentage
-  changes and null handling (zero baseline uptime, fully missing during period).
-
-## Deliberately not done (awaiting stakeholder review)
-
-- **The before/during/after comparison is descriptive.** `fct_pen_storm_analysis` reports changes
-  vs baseline with reporting completeness for reliability assessment; it makes no causal claim and
-  does not control for confounders (season, biomass, node set changes).
-- **No full-calendar storm fact.** Storm exposure is only exposed inside episode windows
-  (`fct_pen_storm_analysis.storm_minutes`); a small `fct_site_daily_storm` fact (site × date) was
-  proposed for full-calendar overlay and declined for now.
-- **Merged-interval storm exposure** if overlapping storms ever appear (cumulative event-minutes
-  today).
-- **Multi-site timezone lookup** — see `docs/limitations.md`.
+*This project was developed as an analytics engineering case study to demonstrate data modelling, transformation design, testing and analytical communication using a modern data stack.*

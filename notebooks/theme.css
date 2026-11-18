@@ -1,7 +1,7 @@
 /* Deck theme — notebooks/stingray_case_presentation.py
-   Proposed palette, not verified Stingray brand colours:
+   Marine technology palette:
    navy #0B1F33 · ocean #123B52 · teal #16A6A1 · seafoam #D9F0EB
-   coral #FF765E · background #F5F8FA · ink #172B3A */
+   coral #FF765E · off-white #F5F8FA · ink #172B3A */
 
 .reveal-viewport {
   background-color: #f5f8fa;
@@ -15,13 +15,40 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* Dark section slides: title and close */
-.reveal-viewport:has(.slides > section.present [data-cell-name="slide_title"]),
-.reveal-viewport:has(.slides > section.present [data-cell-name="slide_closing"]) {
+/* Title slide: full navy field around the content. */
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_title"]) {
   background-color: #0b1f33;
 }
 
-/* Keep prose spacing tight so slides do not scroll */
+/* Dashboard slide: a light product canvas behind the live mock. */
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_dashboard"])
+  .mo-slide-content {
+  background-color: #edf2f5;
+  border-radius: 16px;
+  padding: 16px 18px 14px 18px;
+  box-sizing: border-box;
+}
+
+/* Keep a consistent top edge on every content slide. */
+.mo-slide-content [data-cell-name^="slide_"] {
+  min-height: 650px;
+}
+
+/* The title slide sizes itself to the viewport and centers via the deck. */
+.mo-slide-content [data-cell-name="slide_title"] {
+  min-height: 0;
+}
+
+/* Hide scrollbars while presenting; content is designed to fit. */
+[data-testid="slide-scroll-container"] {
+  scrollbar-width: none;
+}
+
+[data-testid="slide-scroll-container"]::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tight prose spacing so slides do not scroll. */
 .reveal .slides section .prose p {
   margin: 0.35em 0;
 }
@@ -32,28 +59,47 @@
   margin: 0.2em 0;
 }
 
-/* Numerals align in tables and KPIs */
+/* Numerals align in tables, KPIs and code excerpts. */
 .reveal .slides section table,
-.reveal .slides section td {
-  font-variant-numeric: tabular-nums;
-}
-
+.reveal .slides section td,
 .reveal .slides section code {
+  font-variant-numeric: tabular-nums;
   font-variant-ligatures: none;
 }
 
-/* Quiet slide number, when reveal's controls are shown */
+/* Quiet slide number, when reveal's controls are shown. */
 .reveal .slide-number {
   background: transparent;
   color: #5b7285;
   font-size: 11px;
 }
 
-/* Reveal progress bar in the deck's teal rather than the default blue */
+/* Reveal progress bar in the deck's teal rather than the default blue. */
 .reveal .progress {
   background: rgba(11, 31, 51, 0.08);
 }
 
 .reveal .progress span {
   background: #16a6a1;
+}
+
+/* Charts should sit on the slide, not in a browser chrome. */
+marimo-mime-renderer {
+  display: block;
+}
+
+/* Full-bleed title: fill the reveal letterbox and remove the default frame. */
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_title"]) .reveal,
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_title"]) .slides {
+  background-color: #0b1f33 !important;
+}
+
+body:has(.slides > section.present [data-cell-name="slide_title"]),
+html:has(.slides > section.present [data-cell-name="slide_title"]) {
+  background-color: #0b1f33 !important;
+}
+
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_title"]),
+.reveal-viewport:has(.slides > section.present [data-cell-name="slide_title"]) .reveal {
+  border: 0 !important;
 }

@@ -1,16 +1,6 @@
--- One row per storm episode (grouping of closely spaced storm events
--- at one site; see int_storm_episodes).
---
--- Naming caution for consumers: episode_span_minutes / _hours is the
--- WALL-CLOCK span of the episode and deliberately INCLUDES the quiet
--- gaps between member storms. It is never storm exposure - actual
--- exposure minutes per day live in fct_pen_storm_analysis.storm_minutes.
---
--- storm_episode_key equals the intermediate storm_episode_id: that id
--- is already a surrogate over the natural key (site_id +
--- episode_started_at), both of which are retained here as readable
--- attributes. Timestamps are UTC; episode_start_date/episode_end_date
--- are local (Europe/Oslo) calendar dates.
+-- Grain: one row per storm episode (site × episode start).
+-- episode_span_* is wall-clock and includes quiet gaps, NOT exposure.
+-- Timestamps UTC; start/end dates local. Key = storm_episode_id.
 
 with
 

@@ -33,15 +33,13 @@ flowchart LR
       I7[int_storm_daily_exposure]:::int
       I8[int_site_daily_storm_summary]:::int
       I9[int_pen_storm_daily_analysis]:::int
-      I10[int_storm_pen_baselines]:::int
     end
   end
 
   subgraph MART["Marts - tables"]
     D[dims: date, pen, site, storm episode]:::mart
     F1[fct_pen_daily_activity]:::mart
-    F2[fct_pen_storm_analysis]:::mart
-    F3[fct_pen_storm_baseline]:::mart
+    F2[fct_pen_storm_window_day]:::mart
   end
 
   R1 --> S1
@@ -62,7 +60,6 @@ flowchart LR
   I3 --> I9
   I8 --> I9
   I6 --> I9
-  I9 --> I10
   I1 --> D
   I4 --> D
   S2 --> D
@@ -70,6 +67,4 @@ flowchart LR
   I3 --> F1
   I5 --> F1
   I8 --> F1
-  I5 --> F2
   I9 --> F2
-  I10 --> F3

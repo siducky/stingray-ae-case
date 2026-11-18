@@ -1,28 +1,11 @@
--- GRAIN: one row per site, pen and calendar date.
---
--- Daily operational fact: node activity aggregated to pen level, with
--- the selected fish-count snapshot and the site-day storm overlay.
--- Joined 1:1 from int_pen_daily_activity to int_pen_daily_fish_count
--- (pen + date) and int_site_daily_storm_summary (site + date) - no
--- fan-out. The storm overlay makes full-calendar storm context
--- available in the daily fact (site-day values, repeated per pen at the
--- site that day - not additive across pens); episode-relative analysis
--- lives in fct_pen_storm_analysis.
---
--- Usability: natural identifiers (site_id, pen_id, activity_date) are
--- retained next to the surrogate keys, so the table reads without
--- joins. Surrogate keys are generated with the same expressions as
--- the dimensions and verified by relationships tests.
---
--- Measure semantics:
---   - Missing telemetry is NOT zero: measures are null when no node
---     reported; reporting_completeness shows the share of assigned
---     nodes that reported.
---   - fish_count is a snapshot (latest valid entry carried forward
---     under a staleness threshold), null when stale or implausible -
---     never zero.
---   - storm_minutes / storm_count / has_storm come from the complete
---     storm registry, so a site-day without storms is a true zero.
+-- Grain: one row per site × pen × date. Additive pen-day operational fact.
+-- Missing telemetry is null, never zero (has_reported_activity flags it).
+-- Additive: node-day counts, expected minutes, shots, detections, uptime.
+-- Semi-additive: fish_count snapshot (never sum across dates).
+-- Site-day, NOT additive across pens: has_storm, storm_count, storm_minutes,
+-- max_storm_severity.
+-- Shared core metrics: expected_node_minutes, uptime_pct, reporting_completeness,
+-- shots/detections per operating hour, shots per detection.
 
 with
 
@@ -47,12 +30,16 @@ final as (
         pen_days.site_id,
         pen_days.pen_id,
         pen_days.activity_date,
+        pen_days.day_duration_minutes,
         pen_days.expected_node_days,
         pen_days.reported_node_days,
+        pen_days.expected_node_minutes,
+        pen_days.has_reported_activity,
         pen_days.reporting_completeness,
         pen_days.laser_shot_count,
         pen_days.lice_detection_count,
         pen_days.uptime_minutes,
+        pen_days.uptime_pct,
         pen_days.shots_per_operating_hour,
         pen_days.detections_per_operating_hour,
         pen_days.shots_per_detection,
